@@ -4,6 +4,9 @@
 #include "duckdb/function/scalar/string_common.hpp"
 #include "duckdb/function/scalar/string_functions.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression_binder.hpp"
+#include "duckdb/main/settings.hpp"
 
 #include "duckdb/execution/expression_executor.hpp"
 #include "utf8proc_wrapper.hpp"
@@ -694,6 +697,116 @@ void RegularLikeFunction(DataChunk &input, ExpressionState &state, Vector &resul
 	}
 }
 
+struct EscapedLikeCollationData : public FunctionData {
+	vector<unique_ptr<Expression>> keys;
+
+	unique_ptr<FunctionData> Copy() const override {
+		auto result = make_uniq<EscapedLikeCollationData>();
+		for (auto &key : keys) {
+			result->keys.push_back(key->Copy());
+		}
+		return std::move(result);
+	}
+
+	bool Equals(const FunctionData &other) const override {
+		return Expression::ListEquals(keys, other.Cast<EscapedLikeCollationData>().keys);
+	}
+};
+
+struct EscapedLikeCollationState : public FunctionLocalState {
+	EscapedLikeCollationState(ExpressionState &state, const EscapedLikeCollationData &data)
+	    : executor(state.GetContext(), data.keys) {
+		prepared.Initialize(state.GetAllocator(), {LogicalType::VARCHAR, LogicalType::VARCHAR});
+		normalized.Initialize(state.GetAllocator(), {LogicalType::VARCHAR, LogicalType::VARCHAR});
+	}
+
+	ExpressionExecutor executor;
+	DataChunk prepared;
+	DataChunk normalized;
+};
+
+static unique_ptr<FunctionLocalState>
+EscapedLikeCollationInit(ExpressionState &state, const BoundFunctionExpression &expr, FunctionData *bind_data) {
+	return make_uniq<EscapedLikeCollationState>(state, bind_data->Cast<EscapedLikeCollationData>());
+}
+
+template <bool INVERT>
+static void EscapedLikeCollationFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &local = ExecuteFunctionState::GetFunctionState(state)->Cast<EscapedLikeCollationState>();
+	local.prepared.Reset();
+	local.normalized.Reset();
+	local.prepared.data[0].Reference(args.data[0]);
+	auto strings = args.data[0].Validity();
+	auto patterns = args.data[1].Values<string_t>();
+	auto escapes = args.data[2].Values<string_t>();
+	auto writer = FlatVector::Writer<string_t>(local.prepared.data[1], args.size());
+	for (idx_t row_idx = 0; row_idx < args.size(); row_idx++) {
+		if (!strings.IsValid(row_idx) || !patterns[row_idx].IsValid() || !escapes[row_idx].IsValid()) {
+			writer.WriteNull();
+			continue;
+		}
+		auto pattern = patterns[row_idx].GetValue();
+		auto escape = escapes[row_idx].GetValue();
+		auto escape_char = GetEscapeChar(escape);
+		string canonical;
+		for (idx_t pattern_idx = 0; pattern_idx < pattern.GetSize(); pattern_idx++) {
+			auto character = pattern.GetData()[pattern_idx];
+			if (escape.GetSize() != 0 && character == escape_char) {
+				pattern_idx++;
+				if (pattern_idx == pattern.GetSize()) {
+					throw SyntaxException("Like pattern must not end with escape character!");
+				}
+				canonical += '\\';
+				canonical += pattern.GetData()[pattern_idx];
+			} else {
+				if (character == '\\') {
+					canonical += '\\';
+				}
+				canonical += character;
+			}
+		}
+		writer.WriteValue(canonical);
+	}
+	local.executor.Execute(local.prepared, local.normalized);
+	BinaryExecutor::Execute<string_t, string_t, bool>(local.normalized.data[0], local.normalized.data[1], result,
+	                                                  [&](string_t value, string_t pattern) {
+		                                                  auto matches = LikeOperatorFunction(value, pattern, '\\');
+		                                                  return INVERT ? !matches : matches;
+	                                                  });
+}
+
+template <bool INVERT>
+static unique_ptr<FunctionData> EscapedLikeCollationBind(BindScalarFunctionInput &input) {
+	string collation;
+	for (idx_t argument_idx = 0; argument_idx < 2; argument_idx++) {
+		auto argument_collation = StringType::GetCollation(input.GetArguments()[argument_idx]->GetReturnType());
+		if (!collation.empty() && !argument_collation.empty() && collation != argument_collation) {
+			throw BinderException("Cannot combine types with different collation!");
+		}
+		if (!argument_collation.empty()) {
+			collation = argument_collation;
+		}
+	}
+	if (collation.empty()) {
+		collation = Settings::Get<DefaultCollationSetting>(input.GetClientContext());
+	}
+	auto type = LogicalType::VARCHAR_COLLATION(collation);
+	auto data = make_uniq<EscapedLikeCollationData>();
+	bool collated = false;
+	for (idx_t argument_idx = 0; argument_idx < 2; argument_idx++) {
+		unique_ptr<Expression> key = make_uniq<BoundReferenceExpression>(type, argument_idx);
+		collated |=
+		    ExpressionBinder::PushCollation(input.GetClientContext(), key, type, CollationType::COMBINABLE_COLLATIONS);
+		data->keys.push_back(std::move(key));
+	}
+	if (!collated) {
+		return nullptr;
+	}
+	input.GetBoundFunction().SetFunctionCallback(EscapedLikeCollationFunction<INVERT>);
+	input.GetBoundFunction().SetInitStateCallback(EscapedLikeCollationInit);
+	return std::move(data);
+}
+
 } // namespace
 
 ScalarFunction NotLikeFun::GetFunction() {
@@ -749,7 +862,7 @@ ScalarFunction NotLikeEscapeFun::GetFunction() {
 	    .AddParameter("string", LogicalType::VARCHAR)
 	    .AddParameter("like_specifier", LogicalType::VARCHAR)
 	    .AddParameter("escape_character", LogicalType::VARCHAR);
-	not_like_escape.SetCollationHandling(FunctionCollationHandling::PUSH_COMBINABLE_COLLATIONS);
+	not_like_escape.SetBindCallback(EscapedLikeCollationBind<true>);
 	not_like_escape.SetFallible();
 	return not_like_escape;
 }
@@ -781,7 +894,7 @@ ScalarFunction LikeEscapeFun::GetFunction() {
 	    .AddParameter("string", LogicalType::VARCHAR)
 	    .AddParameter("like_specifier", LogicalType::VARCHAR)
 	    .AddParameter("escape_character", LogicalType::VARCHAR);
-	like_escape.SetCollationHandling(FunctionCollationHandling::PUSH_COMBINABLE_COLLATIONS);
+	like_escape.SetBindCallback(EscapedLikeCollationBind<false>);
 	like_escape.SetFallible();
 	return like_escape;
 }

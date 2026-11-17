@@ -1,0 +1,55 @@
+# name: test/sql/collate/extrema_collation.test
+# description: String extrema compare collation keys but return the original spelling and collation
+# group: [collate]
+
+statement ok
+SET debug_verify_serializer = true;
+
+query TTTT
+SELECT least('Z' COLLATE NOCASE, 'a'), greatest('Z' COLLATE NOCASE, 'a'), least('Z', 'a'), greatest('Z', 'a');
+----
+a	Z	Z	a
+
+query TTTT
+SELECT least('ABC' COLLATE NOCASE, 'abc'), greatest('ABC' COLLATE NOCASE, 'abc'), least(NULL, 'Z' COLLATE NOCASE, 'a'), greatest(NULL, 'Z' COLLATE NOCASE, 'a');
+----
+ABC	ABC	a	Z
+
+query TTT
+SELECT least(NULL::VARCHAR COLLATE NOCASE, NULL), least('' COLLATE NOCASE, 'A'), greatest('Ä' COLLATE NOCASE.NOACCENT, 'z', 'b');
+----
+NULL	(empty)	z
+
+query II
+SELECT least('ABC' COLLATE NOCASE, 'Z') = 'abc', greatest('ABC' COLLATE NOCASE, 'a') = 'abc';
+----
+true	true
+
+statement ok
+CREATE TABLE strings AS SELECT CASE WHEN i % 2 = 0 THEN 'Z' ELSE NULL END COLLATE NOCASE AS s, 'a' AS t FROM range(5000) r(i);
+
+query III
+SELECT count(*) FILTER (WHERE least(s, t) = 'a'), count(*) FILTER (WHERE greatest(s, t) = 'z'), count(*) FILTER (WHERE greatest(s, t) = 'a') FROM strings;
+----
+5000	2500	2500
+
+statement ok
+SET default_collation = 'nocase';
+
+query TT
+SELECT least('Z', 'a'), greatest('Z', 'a');
+----
+a	Z
+
+statement ok
+RESET default_collation;
+
+statement error
+SELECT least('a' COLLATE NOCASE, 'b' COLLATE NOACCENT);
+----
+Cannot combine types with different collation
+
+query II
+SELECT least(2, 1, NULL), greatest(2, 1, NULL);
+----
+1	2

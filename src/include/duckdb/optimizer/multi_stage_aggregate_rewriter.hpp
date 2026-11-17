@@ -28,6 +28,7 @@ public:
 
 	void VisitOperator(unique_ptr<LogicalOperator> &op) override;
 	bool WasChanged() const;
+	static bool NeedsCollationRewrite(ClientContext &context, const BoundAggregateExpression &aggregate);
 
 private:
 	bool TryRewrite(unique_ptr<LogicalOperator> &op);

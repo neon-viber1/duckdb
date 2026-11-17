@@ -1,0 +1,55 @@
+# name: test/sql/collate/extended_icu_collation.test
+# description: ICU ordering keys for extrema, DISTINCT payloads, and indexes
+# group: [collate]
+
+require icu
+
+load {TEST_DIR}/extended_icu_collation.db
+
+statement ok
+SET debug_verify_serializer = true;
+
+query TT
+SELECT least('ö' COLLATE de, 'p'), greatest('ö' COLLATE de, 'p');
+----
+ö	p
+
+statement ok
+CREATE TABLE strings(s VARCHAR COLLATE de);
+
+statement ok
+INSERT INTO strings VALUES ('ö'), ('ö'), ('p');
+
+query T
+SELECT list_sort(list(DISTINCT s)) FROM strings;
+----
+[ö, p]
+
+statement ok
+DELETE FROM strings;
+
+statement ok
+INSERT INTO strings VALUES ('ö'), ('p');
+
+statement ok
+CREATE UNIQUE INDEX collated ON strings(s);
+
+statement error
+INSERT INTO strings VALUES ('ö');
+----
+Duplicate key
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query T
+SELECT s FROM strings WHERE s = 'ö';
+----
+ö
+
+statement error
+INSERT INTO strings VALUES ('p');
+----
+Duplicate key

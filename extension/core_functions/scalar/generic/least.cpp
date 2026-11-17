@@ -3,6 +3,9 @@
 #include "duckdb/common/operator/comparison_operators.hpp"
 #include "duckdb/common/smaller_binary.hpp"
 #include "duckdb/function/create_sort_key.hpp"
+#include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/main/settings.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression_binder.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
@@ -26,6 +29,112 @@ struct GreaterOp {
 		return OrderByNullType::NULLS_FIRST;
 	}
 };
+
+struct CollatedExtremaData : public FunctionData {
+	vector<unique_ptr<Expression>> keys;
+
+	unique_ptr<FunctionData> Copy() const override {
+		auto result = make_uniq<CollatedExtremaData>();
+		for (auto &key : keys) {
+			result->keys.push_back(key->Copy());
+		}
+		return std::move(result);
+	}
+
+	bool Equals(const FunctionData &other) const override {
+		return Expression::ListEquals(keys, other.Cast<CollatedExtremaData>().keys);
+	}
+};
+
+struct CollatedExtremaState : public FunctionLocalState {
+	CollatedExtremaState(ExpressionState &state, const CollatedExtremaData &data)
+	    : executor(state.GetContext(), data.keys) {
+		vector<LogicalType> types;
+		for (auto &key : data.keys) {
+			types.push_back(key->GetReturnType());
+		}
+		keys.Initialize(state.GetAllocator(), types);
+	}
+
+	ExpressionExecutor executor;
+	DataChunk keys;
+};
+
+static unique_ptr<FunctionLocalState> CollatedExtremaInit(ExpressionState &state, const BoundFunctionExpression &expr,
+                                                          FunctionData *bind_data) {
+	return make_uniq<CollatedExtremaState>(state, bind_data->Cast<CollatedExtremaData>());
+}
+
+template <class OP>
+static void CollatedExtremaFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &local = ExecuteFunctionState::GetFunctionState(state)->Cast<CollatedExtremaState>();
+	local.keys.Reset();
+	local.executor.Execute(args, local.keys);
+	string_t best_keys[STANDARD_VECTOR_SIZE];
+	string_t best_values[STANDARD_VECTOR_SIZE];
+	bool has_value[STANDARD_VECTOR_SIZE] {false};
+	for (idx_t column_idx = 0; column_idx < args.ColumnCount(); column_idx++) {
+		auto keys = local.keys.data[column_idx].Values<string_t>();
+		auto values = args.data[column_idx].Values<string_t>();
+		StringVector::AddHeapReference(result, args.data[column_idx]);
+		for (idx_t row_idx = 0; row_idx < args.size(); row_idx++) {
+			auto key = keys[row_idx];
+			if (key.IsValid() && (!has_value[row_idx] || OP::Operation(key.GetValue(), best_keys[row_idx]))) {
+				has_value[row_idx] = true;
+				best_keys[row_idx] = key.GetValue();
+				best_values[row_idx] = values[row_idx].GetValue();
+			}
+		}
+	}
+	auto writer = FlatVector::Writer<string_t>(result, args.size());
+	for (idx_t row_idx = 0; row_idx < args.size(); row_idx++) {
+		if (has_value[row_idx]) {
+			writer.WriteStringRef(best_values[row_idx]);
+		} else {
+			writer.WriteNull();
+		}
+	}
+}
+
+template <class EXTREMA_OP>
+static unique_ptr<FunctionData> CollatedExtremaBind(BindScalarFunctionInput &input) {
+	auto &function = input.GetBoundFunction();
+	if (function.GetReturnType().id() != LogicalTypeId::VARCHAR) {
+		return nullptr;
+	}
+	string collation;
+	for (auto &argument : input.GetArguments()) {
+		auto &argument_type = argument->GetReturnType();
+		if (argument_type.id() != LogicalTypeId::VARCHAR) {
+			continue;
+		}
+		auto argument_collation = StringType::GetCollation(argument_type);
+		if (!collation.empty() && !argument_collation.empty() && collation != argument_collation) {
+			throw BinderException("Cannot combine types with different collation!");
+		}
+		if (!argument_collation.empty()) {
+			collation = argument_collation;
+		}
+	}
+	if (collation.empty()) {
+		collation = Settings::Get<DefaultCollationSetting>(input.GetClientContext());
+	}
+	auto type = LogicalType::VARCHAR_COLLATION(collation);
+	auto data = make_uniq<CollatedExtremaData>();
+	bool collated = false;
+	for (idx_t column_idx = 0; column_idx < input.GetArguments().size(); column_idx++) {
+		unique_ptr<Expression> key = make_uniq<BoundReferenceExpression>(type, column_idx);
+		collated |= ExpressionBinder::PushCollation(input.GetClientContext(), key, type);
+		data->keys.push_back(std::move(key));
+	}
+	if (!collated) {
+		return nullptr;
+	}
+	function.SetReturnType(type);
+	function.SetFunctionCallback(CollatedExtremaFunction<typename EXTREMA_OP::OP>);
+	function.SetInitStateCallback(CollatedExtremaInit);
+	return std::move(data);
+}
 
 template <class OP>
 struct LeastOperator {
@@ -309,6 +418,7 @@ ScalarFunction GetLeastGreatestFunction() {
 	                   PropagateLeastGreatestStats<OP>, nullptr, LogicalType::ANY, FunctionStability::CONSISTENT,
 	                   FunctionNullHandling::SPECIAL_HANDLING);
 	fun.SetResolveTypesCallback(LeastGreatestResolveTypes<OP>);
+	fun.SetBindCallback(CollatedExtremaBind<OP>);
 	return fun;
 }
 

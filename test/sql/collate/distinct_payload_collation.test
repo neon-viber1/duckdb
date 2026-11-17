@@ -1,0 +1,94 @@
+# name: test/sql/collate/distinct_payload_collation.test
+# description: Collated DISTINCT retains original aggregate payloads even without optional rewrites
+# group: [collate]
+
+statement ok
+SET debug_verify_serializer = true;
+
+statement ok
+CREATE TABLE strings(g INTEGER, s VARCHAR COLLATE NOCASE);
+
+statement ok
+INSERT INTO strings VALUES (1, 'AAA'), (1, 'aaa'), (1, 'Z'), (1, NULL), (2, 'BBB'), (2, 'bbb'), (2, NULL);
+
+query III
+SELECT count(DISTINCT s), len(list(DISTINCT s)), count(*) FROM strings;
+----
+3	4	7
+
+query IT
+SELECT g, list_sort(list_transform(list(DISTINCT s), lambda x: upper(x))) FROM strings GROUP BY g ORDER BY g;
+----
+1	[AAA, Z, NULL]
+2	[BBB, NULL]
+
+query TT
+SELECT upper(string_agg(DISTINCT s, ',' ORDER BY s)), list_sort(list_transform(list(DISTINCT s) FILTER (WHERE g = 1), lambda x: upper(x))) FROM strings;
+----
+AAA,BBB,Z	[AAA, Z, NULL]
+
+statement ok
+SET disabled_optimizers = 'distinct_aggregate_rewrite';
+
+query IT
+SELECT g, list_sort(list_transform(list(DISTINCT s), lambda x: upper(x))) FROM strings GROUP BY g ORDER BY g;
+----
+1	[AAA, Z, NULL]
+2	[BBB, NULL]
+
+query III
+SELECT len(list(DISTINCT s)), len(list(DISTINCT s) FILTER (WHERE g = 1)), count(DISTINCT s) FROM strings;
+----
+4	3	3
+
+query TT
+SELECT list(DISTINCT s), string_agg(DISTINCT s) FROM strings WHERE s = 'Z';
+----
+[Z]	Z
+
+query T
+SELECT list(DISTINCT x COLLATE NOACCENT.NOCASE) FROM (VALUES ('HÉLLO'), ('HÉLLO')) t(x);
+----
+[HÉLLO]
+
+query IT rowsort
+SELECT g, list_sort(list_transform(list(DISTINCT s), lambda x: upper(x))) FROM strings GROUP BY GROUPING SETS ((g), ());
+----
+1	[AAA, Z, NULL]
+2	[BBB, NULL]
+NULL	[AAA, BBB, Z, NULL]
+
+statement ok
+SET threads = 4;
+
+statement ok
+CREATE TABLE payloads AS SELECT CASE WHEN i % 2 = 0 THEN 'Original' ELSE 'ORIGINAL' END COLLATE NOCASE AS s FROM range(300000) t(i);
+
+query II
+SELECT count(*), bool_and(x COLLATE "binary" IN ('Original', 'ORIGINAL')) FROM (SELECT unnest(list(DISTINCT s)) AS x FROM payloads);
+----
+1	true
+
+query T
+SELECT list(DISTINCT s) FROM strings WHERE false;
+----
+NULL
+
+statement ok
+SET default_collation = 'nocase';
+
+query II
+SELECT 42 IN (42, 43), 'AAA' COLLATE NOCASE IN ('aaa', 'bbb');
+----
+true	true
+
+query IT
+SELECT g, typeof(g) FROM strings GROUP BY g ORDER BY g;
+----
+1	INTEGER
+2	INTEGER
+
+query TT
+SELECT ts, typeof(ts) FROM (VALUES (TIMESTAMP '2020-01-01'), (TIMESTAMP '2020-01-01')) t(ts) GROUP BY ts;
+----
+2020-01-01 00:00:00	TIMESTAMP

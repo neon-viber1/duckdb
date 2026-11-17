@@ -6,6 +6,9 @@
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/planner/collation_binding.hpp"
+#include "duckdb/main/settings.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/binder.hpp"
@@ -458,6 +461,30 @@ unique_ptr<LogicalOperator> IndexBinder::BindCreateIndex(ClientContext &context,
 		for (auto &expr : create_index_info->expressions) {
 			properties.always_require_rebind = false;
 			expressions.push_back(Bind(expr));
+			if (expressions.back()->GetReturnType().id() == LogicalTypeId::VARCHAR) {
+				auto collation = StringType::GetCollation(expressions.back()->GetReturnType());
+				if (collation.empty()) {
+					collation = Settings::Get<DefaultCollationSetting>(context);
+				}
+				if (!collation.empty()) {
+					auto expression_idx = expressions.size() - 1;
+					auto type = LogicalType::VARCHAR_COLLATION(collation);
+					auto functions = CollationBinding::Get(context).GetCollationFunctions(
+					    context, type, CollationType::ALL_COLLATIONS);
+					for (auto &function : functions) {
+						auto function_name = QualifiedName(Catalog::GetSystemCatalog(context).GetName(),
+						                                   Identifier::DefaultSchema(), Identifier(function));
+						vector<unique_ptr<ParsedExpression>> children;
+						children.push_back(std::move(expr));
+						expr = make_uniq<FunctionExpression>(function_name, std::move(children));
+						vector<unique_ptr<ParsedExpression>> stored_children;
+						stored_children.push_back(std::move(create_index_info->parsed_expressions[expression_idx]));
+						create_index_info->parsed_expressions[expression_idx] =
+						    make_uniq<FunctionExpression>(function_name, std::move(stored_children));
+					}
+					PushCollation(context, expressions.back(), type);
+				}
+			}
 			ErrorData error;
 			if (!IsValidIndexExpression(binder, *expressions.back(), error)) {
 				error.Throw();

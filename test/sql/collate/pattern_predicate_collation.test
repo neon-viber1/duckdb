@@ -1,0 +1,94 @@
+# name: test/sql/collate/pattern_predicate_collation.test
+# description: NOCASE pattern predicates preserve regex syntax, options, and LIKE escapes
+# group: [collate]
+
+statement ok
+SET debug_verify_serializer = true;
+
+query IIII
+SELECT regexp_matches('ABC' COLLATE NOCASE, '^abc$'), regexp_full_match('ÄBC' COLLATE NOCASE, 'äbc'), regexp_matches('ABC', '^abc$'), regexp_matches('ABC', '^abc$' COLLATE NOCASE);
+----
+true	true	false	true
+
+query I
+SELECT regexp_matches('ABC' COLLATE NOCASE.NOCASE, '^abc$');
+----
+true
+
+query IIII
+SELECT regexp_full_match('ABC' COLLATE NOCASE, '\D+'), regexp_full_match('123' COLLATE NOCASE, '\D+'), regexp_full_match('ABC' COLLATE NOCASE, '[a-z]+', 'c'), regexp_full_match('ABC' COLLATE NOCASE, '[a-z]+', 'ci');
+----
+true	false	false	true
+
+query III
+SELECT regexp_full_match('ABC' COLLATE NOCASE, '(?-i:abc)'), regexp_matches(NULL::VARCHAR COLLATE NOCASE, 'a'), regexp_matches('a' COLLATE NOCASE, NULL);
+----
+false	NULL	NULL
+
+statement ok
+CREATE TABLE patterns(s VARCHAR COLLATE NOCASE, p VARCHAR);
+
+statement ok
+INSERT INTO patterns VALUES ('ABC', '^abc$'), ('ÄBC', '^äbc$'), ('123', '\D+'), (NULL, 'a'), ('abc', NULL);
+
+query II
+SELECT count(*) FILTER (WHERE regexp_matches(s, p)), count(*) FILTER (WHERE regexp_full_match(s, p)) FROM patterns;
+----
+2	2
+
+query I
+SELECT count(*) FROM patterns WHERE regexp_full_match(s, 'abc');
+----
+2
+
+query IIII
+SELECT 'A_C' COLLATE NOCASE LIKE 'aX_c' ESCAPE 'X', 'A%C' COLLATE NOCASE LIKE 'a$%c' ESCAPE '$', 'ABC' COLLATE NOCASE NOT LIKE 'a%', NULL::VARCHAR COLLATE NOCASE LIKE '%';
+----
+true	true	false	NULL
+
+query III
+SELECT 'A_x' COLLATE NOCASE LIKE 'aX_x' ESCAPE 'X', 'A_x' COLLATE NOCASE NOT LIKE 'aX_x' ESCAPE 'X', 'A\\x' COLLATE NOCASE LIKE 'a\\x' ESCAPE '';
+----
+true	false	true
+
+statement ok
+CREATE TABLE escaped_patterns(s VARCHAR COLLATE NOCASE, p VARCHAR, e VARCHAR);
+
+statement ok
+INSERT INTO escaped_patterns VALUES ('A_x', 'aX_x', 'X'), ('Ä_x', 'äX_x', 'X'), (NULL, 'a', 'X'), ('a', NULL, 'X'), ('a', 'a', NULL);
+
+query II
+SELECT count(*) FILTER (WHERE s LIKE p ESCAPE e), count(*) FILTER (WHERE s NOT LIKE p ESCAPE e) FROM escaped_patterns;
+----
+2	0
+
+statement error
+SELECT 'abc' COLLATE NOCASE LIKE 'abcX' ESCAPE 'X';
+----
+Like pattern must not end with escape character
+
+statement ok
+SET default_collation = 'nocase';
+
+query III
+SELECT regexp_matches('ABC', '^abc$'), regexp_matches('ABC', '^abc$', 'c'), regexp_matches('ABC', '^abc$', 'i');
+----
+true	false	true
+
+query I
+SELECT count(*) FROM patterns WHERE regexp_matches(s COLLATE "binary", 'abc', 'c');
+----
+1
+
+statement ok
+RESET default_collation;
+
+statement error
+SELECT regexp_matches('a' COLLATE NOACCENT, 'a');
+----
+Regular expression matching only supports binary and NOCASE collations
+
+statement error
+SELECT regexp_matches('a' COLLATE NOCASE, 'a' COLLATE NOACCENT);
+----
+Cannot combine types with different collation
