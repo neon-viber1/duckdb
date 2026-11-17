@@ -23,6 +23,7 @@
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/parser/constraints/unique_constraint.hpp"
+#include "duckdb/parser/constraints/foreign_key_constraint.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/parser/parsed_data/create_trigger_info.hpp"
@@ -991,7 +992,7 @@ void WriteAheadLogDeserializer::ReplayAlter() {
 		}
 	}
 	alter_info.bind_mode = AlterBindMode::SKIP_BINDING;
-	if (!alter_info.IsAddUniqueConstraint()) {
+	if (!alter_info.IsAddIndexConstraint()) {
 		return ReplayWithoutIndex(context, catalog, alter_info, DeserializeOnly());
 	}
 
@@ -1003,7 +1004,6 @@ void WriteAheadLogDeserializer::ReplayAlter() {
 
 	auto &table_info = alter_info.Cast<AlterTableInfo>();
 	auto &constraint_info = table_info.Cast<AddConstraintInfo>();
-	auto &unique_info = constraint_info.constraint->Cast<UniqueConstraint>();
 
 	auto table_name = ReplayQualifiedName(catalog, table_info.GetQualifiedName(), table_info.GetQualifiedName().Name());
 	auto &table = catalog.GetEntry<TableCatalogEntry>(context, table_name).Cast<DuckTableEntry>();
@@ -1026,7 +1026,19 @@ void WriteAheadLogDeserializer::ReplayAlter() {
 
 	// Bind the parsed expressions to create unbound expressions.
 	vector<unique_ptr<Expression>> unbound_expressions;
-	auto logical_indexes = unique_info.GetLogicalIndexes(column_list);
+	vector<LogicalIndex> logical_indexes;
+	auto constraint_type = IndexConstraintType::FOREIGN;
+	auto check_mode = ConstraintCheckMode::DEFAULT;
+	if (constraint_info.constraint->type == ConstraintType::UNIQUE) {
+		auto &unique = constraint_info.constraint->Cast<UniqueConstraint>();
+		logical_indexes = unique.GetLogicalIndexes(column_list);
+		constraint_type = unique.GetIndexConstraintType();
+		check_mode = unique.check_mode;
+	} else {
+		for (auto &key : constraint_info.constraint->Cast<ForeignKeyConstraint>().info.fk_keys) {
+			logical_indexes.push_back(column_list.GetColumn(key).Logical());
+		}
+	}
 	for (const auto &logical_index : logical_indexes) {
 		auto &col = column_list.GetColumn(logical_index);
 		unique_ptr<ParsedExpression> parsed =
@@ -1041,19 +1053,18 @@ void WriteAheadLogDeserializer::ReplayAlter() {
 	}
 
 	auto &storage = table.GetStorage();
-	CreateIndexInput input(context, TableIOManager::Get(storage), storage.db, unique_info.GetIndexConstraintType(),
-	                       index_storage_info.name, column_ids, unbound_expressions, index_storage_info,
-	                       index_storage_info.options);
+	CreateIndexInput input(context, TableIOManager::Get(storage), storage.db, constraint_type, index_storage_info.name,
+	                       column_ids, unbound_expressions, index_storage_info, index_storage_info.options);
 
 	auto index_type = context.db->config.GetIndexTypes().FindByName(ART::TYPE_NAME);
 	auto index_instance = index_type->create_instance(input);
 
 	auto &table_index_list = storage.GetDataTableInfo()->GetIndexes();
 	auto index_oid = DatabaseManager::Get(context).NextOid();
-	unique_info.SetBackingIndexOid(index_oid);
+	constraint_info.constraint->SetBackingIndexOid(index_oid);
 	catalog.Alter(context, alter_info);
 	state.replay_index_infos.emplace_back(table_index_list, std::move(index_instance), table.oid, index_oid,
-	                                      unique_info.check_mode);
+	                                      check_mode);
 }
 
 //===--------------------------------------------------------------------===//

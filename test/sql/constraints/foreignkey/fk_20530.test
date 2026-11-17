@@ -31,7 +31,7 @@ FROM duckdb_constraints()
 WHERE table_name = 'george'
   AND constraint_type = 'FOREIGN KEY';
 ----
-FOREIGN KEY (zippy_id) REFERENCES freddy.zippy(id)
+CONSTRAINT george_zippy_id_id_fkey FOREIGN KEY (zippy_id) REFERENCES freddy.zippy(id)
 
 statement ok
 SET schema = main;
@@ -53,4 +53,4 @@ FROM duckdb_constraints()
 WHERE table_name = 'george_main'
   AND constraint_type = 'FOREIGN KEY';
 ----
-FOREIGN KEY (zippy_id) REFERENCES zippy_main(id)
+CONSTRAINT george_main_zippy_id_id_fkey FOREIGN KEY (zippy_id) REFERENCES zippy_main(id)

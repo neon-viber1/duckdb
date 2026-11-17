@@ -306,6 +306,13 @@ unique_ptr<CatalogEntry> DuckTableEntry::AlterEntry(ClientContext &context, Alte
 		copied_table->name = rename_info.new_table_name;
 		// CHECK constraints can qualify columns with the table name
 		for (auto &constraint : copied_table->Cast<DuckTableEntry>().constraints) {
+			if (constraint->type == ConstraintType::FOREIGN_KEY) {
+				auto &fk = constraint->Cast<ForeignKeyConstraint>();
+				if (fk.info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE) {
+					fk.info.table = rename_info.new_table_name;
+					fk.referenced_table = QualifiedName(schema.GetSchemaPath(), rename_info.new_table_name);
+				}
+			}
 			if (constraint->type != ConstraintType::CHECK) {
 				continue;
 			}
@@ -346,7 +353,7 @@ unique_ptr<CatalogEntry> DuckTableEntry::AlterEntry(ClientContext &context, Alte
 	case AlterTableType::FOREIGN_KEY_CONSTRAINT: {
 		auto &foreign_key_constraint_info = table_info.Cast<AlterForeignKeyInfo>();
 		if (foreign_key_constraint_info.type == AlterForeignKeyType::AFT_ADD) {
-			return AddForeignKeyConstraint(foreign_key_constraint_info);
+			return AddForeignKeyConstraint(foreign_key_constraint_info, context);
 		} else {
 			return DropForeignKeyConstraint(context, foreign_key_constraint_info);
 		}
@@ -362,6 +369,39 @@ unique_ptr<CatalogEntry> DuckTableEntry::AlterEntry(ClientContext &context, Alte
 	case AlterTableType::ADD_CONSTRAINT: {
 		auto &add_constraint_info = table_info.Cast<AddConstraintInfo>();
 		return AddConstraint(context, add_constraint_info);
+	}
+	case AlterTableType::DROP_CONSTRAINT: {
+		auto &drop_info = table_info.Cast<DropConstraintInfo>();
+		auto create_info = GetInfo();
+		auto &table = create_info->Cast<CreateTableInfo>();
+		bool found = false;
+		for (idx_t index = 0; index < table.constraints.size(); index++) {
+			auto &constraint = table.constraints[index];
+			if (constraint->name != drop_info.constraint_name) {
+				continue;
+			}
+			if (constraint->type != ConstraintType::FOREIGN_KEY) {
+				throw NotImplementedException("Only foreign key constraints can be dropped");
+			}
+			if (!constraint->Cast<ForeignKeyConstraint>().info.IsAppendConstraint()) {
+				continue;
+			}
+			table.constraints.erase_at(index);
+			found = true;
+			break;
+		}
+		if (!found) {
+			if (!drop_info.if_exists) {
+				throw CatalogException("Constraint with name %s does not exist on table %s", drop_info.constraint_name,
+				                       name);
+			}
+			return Copy(context);
+		}
+		auto binder = Binder::CreateBinder(context);
+		auto bound = binder->BindCreateTableInfo(std::move(create_info), schema, info.bind_mode);
+		SetAlterDependencies(context, *bound, info);
+		auto new_storage = make_shared_ptr<DataTable>(context, *storage);
+		return make_uniq<DuckTableEntry>(catalog, schema, *bound, new_storage, triggers);
 	}
 	case AlterTableType::SET_PARTITIONED_BY:
 		throw NotImplementedException("SET PARTITIONED BY is not supported for DuckDB tables");
@@ -1298,7 +1338,8 @@ unique_ptr<CatalogEntry> DuckTableEntry::SetColumnComment(ClientContext &context
 	return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, storage, triggers);
 }
 
-unique_ptr<CatalogEntry> DuckTableEntry::AddForeignKeyConstraint(AlterForeignKeyInfo &info) {
+unique_ptr<CatalogEntry> DuckTableEntry::AddForeignKeyConstraint(AlterForeignKeyInfo &info,
+                                                                 optional_ptr<ClientContext> context) {
 	D_ASSERT(info.type == AlterForeignKeyType::AFT_ADD);
 	auto create_info = make_uniq<CreateTableInfo>(schema, name);
 	create_info->temporary = temporary;
@@ -1306,8 +1347,19 @@ unique_ptr<CatalogEntry> DuckTableEntry::AddForeignKeyConstraint(AlterForeignKey
 	create_info->tags = tags;
 
 	create_info->columns = columns.Copy();
+	bool matched = false;
 	for (idx_t i = 0; i < constraints.size(); i++) {
-		create_info->constraints.push_back(constraints[i]->Copy());
+		auto copy = constraints[i]->Copy();
+		if (!matched && copy->type == ConstraintType::FOREIGN_KEY) {
+			auto &fk = copy->Cast<ForeignKeyConstraint>();
+			if (fk.info.type == ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE && fk.info.table == info.fk_table &&
+			    fk.info.pk_keys == info.pk_keys && fk.info.fk_keys == info.fk_keys &&
+			    (copy->name.empty() || copy->name == info.constraint_name)) {
+				copy->name = info.constraint_name;
+				matched = true;
+			}
+		}
+		create_info->constraints.push_back(std::move(copy));
 	}
 	ForeignKeyInfo fk_info;
 	fk_info.type = ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE;
@@ -1315,12 +1367,19 @@ unique_ptr<CatalogEntry> DuckTableEntry::AddForeignKeyConstraint(AlterForeignKey
 	fk_info.table = info.fk_table;
 	fk_info.pk_keys = info.pk_keys;
 	fk_info.fk_keys = info.fk_keys;
-	create_info->constraints.push_back(
-	    make_uniq<ForeignKeyConstraint>(info.pk_columns, info.fk_columns, std::move(fk_info)));
+	if (!matched) {
+		create_info->constraints.push_back(
+		    make_uniq<ForeignKeyConstraint>(info.pk_columns, info.fk_columns, std::move(fk_info)));
+		create_info->constraints.back()->name = info.constraint_name;
+	}
 
 	unique_ptr<BoundCreateTableInfo> bound_create_info;
 	bound_create_info = Binder::BindCreateTableCheckpoint(std::move(create_info), schema);
-	return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, storage, triggers);
+	auto new_storage = storage;
+	if (context) {
+		new_storage = make_shared_ptr<DataTable>(*context, *storage);
+	}
+	return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, new_storage, triggers);
 }
 
 unique_ptr<CatalogEntry> DuckTableEntry::DropForeignKeyConstraint(ClientContext &context, AlterForeignKeyInfo &info) {
@@ -1335,7 +1394,8 @@ unique_ptr<CatalogEntry> DuckTableEntry::DropForeignKeyConstraint(ClientContext 
 		auto constraint = constraints[i]->Copy();
 		if (constraint->type == ConstraintType::FOREIGN_KEY) {
 			ForeignKeyConstraint &fk = constraint->Cast<ForeignKeyConstraint>();
-			if (fk.info.type == ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE && fk.info.table == info.fk_table) {
+			if (fk.info.type == ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE && fk.info.table == info.fk_table &&
+			    (info.constraint_name.empty() || constraint->name == info.constraint_name)) {
 				continue;
 			}
 		}
@@ -1345,7 +1405,8 @@ unique_ptr<CatalogEntry> DuckTableEntry::DropForeignKeyConstraint(ClientContext 
 	auto binder = Binder::CreateBinder(context);
 	auto bound_create_info = binder->BindCreateTableInfo(std::move(create_info), schema, info.bind_mode);
 	SetAlterDependencies(context, *bound_create_info, info);
-	return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, storage, triggers);
+	auto new_storage = make_shared_ptr<DataTable>(context, *storage);
+	return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, new_storage, triggers);
 }
 
 void DuckTableEntry::Rollback(CatalogEntry &prev_entry) {
@@ -1356,22 +1417,26 @@ void DuckTableEntry::Rollback(CatalogEntry &prev_entry) {
 	// Rolls back any physical index creation for index-based constraints.
 	auto &prev_table = prev_entry.Cast<DuckTableEntry>();
 	auto &prev_indexes = prev_table.GetStorage().GetDataTableInfo()->GetIndexes();
-	for (auto oid : GetAddedUniqueIndexOids(prev_table)) {
+	for (auto oid : GetAddedConstraintIndexOids(prev_table)) {
 		prev_indexes.RemoveIndex(oid);
 	}
 }
 
-vector<idx_t> DuckTableEntry::GetAddedUniqueIndexOids(const DuckTableEntry &prev_table) const {
+vector<idx_t> DuckTableEntry::GetAddedConstraintIndexOids(const DuckTableEntry &prev_table) const {
 	unordered_set<idx_t> prev_oids;
 	for (const auto &constraint : prev_table.GetConstraints()) {
-		if (constraint->type == ConstraintType::UNIQUE) {
+		if (constraint->type == ConstraintType::UNIQUE ||
+		    (constraint->type == ConstraintType::FOREIGN_KEY &&
+		     constraint->Cast<ForeignKeyConstraint>().info.IsAppendConstraint())) {
 			prev_oids.insert(constraint->GetBackingIndexOid());
 		}
 	}
 
 	vector<idx_t> result;
 	for (const auto &constraint : GetConstraints()) {
-		if (constraint->type != ConstraintType::UNIQUE) {
+		if (constraint->type != ConstraintType::UNIQUE &&
+		    !(constraint->type == ConstraintType::FOREIGN_KEY &&
+		      constraint->Cast<ForeignKeyConstraint>().info.IsAppendConstraint())) {
 			continue;
 		}
 		auto oid = constraint->GetBackingIndexOid();
@@ -1412,6 +1477,8 @@ unique_ptr<CatalogEntry> DuckTableEntry::AddConstraint(ClientContext &context, A
 		}
 		table_info.constraints.push_back(info.constraint->Copy());
 
+	} else if (info.constraint->type == ConstraintType::FOREIGN_KEY) {
+		table_info.constraints.push_back(info.constraint->Copy());
 	} else {
 		throw NotImplementedException("No support for adding %s constraints with ALTER TABLE",
 		                              EnumUtil::ToString(info.constraint->type));
@@ -1431,7 +1498,8 @@ unique_ptr<CatalogEntry> DuckTableEntry::AddConstraint(ClientContext &context, A
 			}
 		}
 	}
-	if (storage->GetDataTableInfo()->GetIndexes().Count() > constraint_index_count) {
+	if (info.constraint->type == ConstraintType::UNIQUE &&
+	    storage->GetDataTableInfo()->GetIndexes().Count() > constraint_index_count) {
 		throw DependencyException("Cannot alter entry %s because there are entries that depend on it.", name);
 	}
 
@@ -1442,7 +1510,10 @@ unique_ptr<CatalogEntry> DuckTableEntry::AddConstraint(ClientContext &context, A
 	const auto bound_create_info = binder->BindCreateTableInfo(std::move(create_info), schema, info.bind_mode);
 	SetAlterDependencies(context, *bound_create_info, info);
 
-	auto new_storage = make_shared_ptr<DataTable>(context, *storage, *bound_constraint);
+	auto new_storage =
+	    info.bind_mode == AlterBindMode::SKIP_BINDING && info.constraint->type == ConstraintType::FOREIGN_KEY
+	        ? make_shared_ptr<DataTable>(context, *storage)
+	        : make_shared_ptr<DataTable>(context, *storage, *bound_constraint);
 	auto new_entry = make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, new_storage, triggers);
 	return std::move(new_entry);
 }

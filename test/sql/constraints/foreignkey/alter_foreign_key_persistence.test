@@ -1,0 +1,151 @@
+# name: test/sql/constraints/foreignkey/alter_foreign_key_persistence.test
+# description: Foreign key names, owned indexes and dependencies survive recovery
+# group: [foreignkey]
+
+load {TEST_DIR}/alter_fk.db
+
+statement ok
+CREATE TABLE parent(id INTEGER PRIMARY KEY);
+
+statement ok
+CREATE TABLE child(id INTEGER, other INTEGER);
+
+statement ok
+CREATE INDEX independent ON child(other);
+
+statement ok
+INSERT INTO parent VALUES (1), (2);
+
+statement ok
+INSERT INTO child VALUES (1, 2);
+
+statement ok
+ALTER TABLE child ADD CONSTRAINT "Persistent Link" FOREIGN KEY(id) REFERENCES parent(id);
+
+statement ok
+ALTER TABLE child ADD CONSTRAINT second_link FOREIGN KEY(id) REFERENCES parent(id);
+
+statement ok
+ALTER TABLE child DROP CONSTRAINT "Persistent Link";
+
+statement ok
+ALTER TABLE child ADD CONSTRAINT "Persistent Link" FOREIGN KEY(other) REFERENCES parent(id);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I rowsort
+SELECT constraint_name FROM duckdb_constraints() WHERE table_name = 'child';
+----
+Persistent Link
+second_link
+
+query I
+SELECT count(*) FROM duckdb_indexes() WHERE index_name = 'independent';
+----
+1
+
+statement error
+INSERT INTO child VALUES (99, 2);
+----
+Violates foreign key constraint
+
+statement error
+INSERT INTO child VALUES (1, 99);
+----
+Violates foreign key constraint
+
+statement ok
+ALTER TABLE child DROP CONSTRAINT second_link;
+
+statement ok
+INSERT INTO child VALUES (99, 2);
+
+statement error
+DELETE FROM parent WHERE id = 2;
+----
+Violates foreign key constraint
+
+statement ok
+ALTER TABLE child DROP CONSTRAINT "Persistent Link";
+
+statement ok
+ALTER TABLE child ADD CONSTRAINT "Persistent Link" FOREIGN KEY(other) REFERENCES parent(id);
+
+statement ok
+SET checkpoint_on_shutdown = false;
+
+restart
+
+query I
+SELECT constraint_name FROM duckdb_constraints() WHERE table_name = 'child';
+----
+Persistent Link
+
+statement error
+INSERT INTO child VALUES (1, 99);
+----
+Violates foreign key constraint
+
+statement ok
+ALTER TABLE child ADD COLUMN extra VARCHAR;
+
+query I
+SELECT count(*) FROM duckdb_indexes() WHERE index_name = 'independent';
+----
+1
+
+statement ok
+DROP INDEX independent;
+
+statement ok
+ALTER TABLE child RENAME COLUMN extra TO renamed;
+
+statement ok
+ALTER TABLE child RENAME TO renamed_child;
+
+statement ok
+ALTER TABLE renamed_child RENAME TO child;
+
+query I
+SELECT constraint_name FROM duckdb_constraints() WHERE table_name = 'child';
+----
+Persistent Link
+
+statement ok
+EXPORT DATABASE '{TEST_DIR}/export_fk';
+
+statement ok
+DROP TABLE child;
+
+statement ok
+DROP TABLE parent;
+
+statement ok
+IMPORT DATABASE '{TEST_DIR}/export_fk';
+
+query I
+SELECT constraint_name FROM duckdb_constraints() WHERE table_name = 'child';
+----
+Persistent Link
+
+statement error
+INSERT INTO child VALUES (1, 99, NULL);
+----
+Violates foreign key constraint
+
+statement ok
+ALTER TABLE child DROP CONSTRAINT "Persistent Link";
+
+statement ok
+DROP TABLE parent;
+
+statement ok
+CHECKPOINT;
+
+restart
+
+statement ok
+INSERT INTO child VALUES (1, 99, NULL);

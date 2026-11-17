@@ -106,6 +106,7 @@ public:
 	AlterEntryData GetAlterEntryData() const;
 	bool IsAddPrimaryKey() const;
 	bool IsAddUniqueConstraint() const;
+	bool IsAddIndexConstraint() const;
 	DatabaseModificationType GetModifications() const;
 
 protected:

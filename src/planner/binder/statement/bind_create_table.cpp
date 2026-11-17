@@ -380,8 +380,11 @@ unique_ptr<BoundCreateTableInfo> Binder::BindCreateTableInfo(unique_ptr<CreateIn
 	return BindCreateTableInfo(std::move(info), schema, bound_defaults, bind_mode);
 }
 
+static void AssignConstraintNames(CreateTableInfo &create_info);
+
 unique_ptr<BoundCreateTableInfo> Binder::BindCreateTableCheckpoint(unique_ptr<CreateInfo> info,
                                                                    SchemaCatalogEntry &schema) {
+	AssignConstraintNames(info->Cast<CreateTableInfo>());
 	auto result = make_uniq<BoundCreateTableInfo>(schema, std::move(info));
 	CreateColumnDependencyManager(*result);
 	return result;
@@ -570,6 +573,41 @@ static void CheckForeignKeyTypes(const ColumnList &pk_columns, const ColumnList 
 	}
 }
 
+static void AssignConstraintNames(CreateTableInfo &create_info) {
+	identifier_set_t names;
+	for (auto &constraint : create_info.constraints) {
+		if (constraint->type == ConstraintType::FOREIGN_KEY &&
+		    constraint->Cast<ForeignKeyConstraint>().info.type == ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE) {
+			continue;
+		}
+		if (!constraint->name.empty() && !names.insert(constraint->name).second) {
+			throw BinderException("Duplicate constraint name %s", constraint->name);
+		}
+	}
+	for (auto &constraint : create_info.constraints) {
+		if (constraint->type != ConstraintType::FOREIGN_KEY || !constraint->name.empty()) {
+			continue;
+		}
+		auto &fk = constraint->Cast<ForeignKeyConstraint>();
+		if (!fk.info.IsAppendConstraint()) {
+			continue;
+		}
+		string base = create_info.GetTableName() + "_";
+		for (auto &column : fk.fk_columns) {
+			base += StringUtil::Lower(column.GetIdentifierName()) + "_";
+		}
+		for (auto &column : fk.pk_columns) {
+			base += StringUtil::Lower(column.GetIdentifierName()) + "_";
+		}
+		base += "fkey";
+		constraint->name = Identifier(base);
+		idx_t suffix = 2;
+		while (!names.insert(constraint->name).second) {
+			constraint->name = Identifier(base + "_" + to_string(suffix++));
+		}
+	}
+}
+
 static void BindCreateTableConstraints(CreateTableInfo &create_info, CatalogEntryRetriever &entry_retriever,
                                        SchemaCatalogEntry &schema) {
 	// If there is a foreign key constraint, resolve primary key column's index from primary key column's name
@@ -584,7 +622,7 @@ static void BindCreateTableConstraints(CreateTableInfo &create_info, CatalogEntr
 			continue;
 		}
 		if (!fk.info.pk_keys.empty() && !fk.info.fk_keys.empty()) {
-			return;
+			continue;
 		}
 		D_ASSERT(fk.info.pk_keys.empty());
 		D_ASSERT(fk.info.fk_keys.empty());
@@ -647,6 +685,7 @@ static void BindCreateTableConstraints(CreateTableInfo &create_info, CatalogEntr
 		D_ASSERT(fk.info.pk_keys.size() == fk.pk_columns.size());
 		D_ASSERT(fk.info.fk_keys.size() == fk.fk_columns.size());
 	}
+	AssignConstraintNames(create_info);
 }
 
 unique_ptr<BoundCreateTableInfo> Binder::BindCreateTableInfo(unique_ptr<CreateInfo> info, SchemaCatalogEntry &schema,

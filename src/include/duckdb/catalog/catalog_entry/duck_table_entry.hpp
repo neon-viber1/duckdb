@@ -52,8 +52,8 @@ public:
 	void CommitAlter(string &column_name, CommitDropState &drop_state);
 	void CommitDrop(CommitDropState &drop_state);
 
-	//! Returns the backing index OIDs of UNIQUE constraints that are not in prev_table.
-	vector<idx_t> GetAddedUniqueIndexOids(const DuckTableEntry &prev_table) const;
+	//! Returns backing index OIDs of constraints that are not in prev_table.
+	vector<idx_t> GetAddedConstraintIndexOids(const DuckTableEntry &prev_table) const;
 
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) override;
 
@@ -97,7 +97,8 @@ private:
 	                                          AlterTableType alter_table_type);
 	unique_ptr<CatalogEntry> SetNotNull(ClientContext &context, SetNotNullInfo &info);
 	unique_ptr<CatalogEntry> DropNotNull(ClientContext &context, DropNotNullInfo &info);
-	unique_ptr<CatalogEntry> AddForeignKeyConstraint(AlterForeignKeyInfo &info);
+	unique_ptr<CatalogEntry> AddForeignKeyConstraint(AlterForeignKeyInfo &info,
+	                                                 optional_ptr<ClientContext> context = nullptr);
 	unique_ptr<CatalogEntry> DropForeignKeyConstraint(ClientContext &context, AlterForeignKeyInfo &info);
 	unique_ptr<CatalogEntry> SetColumnComment(ClientContext &context, SetColumnCommentInfo &info);
 	unique_ptr<CatalogEntry> AddConstraint(ClientContext &context, AddConstraintInfo &info);

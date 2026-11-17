@@ -10,6 +10,13 @@
         "id": 100,
         "name": "type",
         "type": "ConstraintType"
+      },
+      {
+        "id": 101,
+        "name": "name",
+        "type": "Identifier",
+        "version": "v2.0.0",
+        "default": "Identifier()"
       }
     ]
   },

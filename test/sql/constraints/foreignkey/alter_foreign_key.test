@@ -1,0 +1,373 @@
+# name: test/sql/constraints/foreignkey/alter_foreign_key.test
+# description: Add and drop named foreign keys on existing tables
+# group: [foreignkey]
+
+statement ok
+CREATE TABLE parent(id INTEGER PRIMARY KEY);
+
+statement ok
+CREATE TABLE child(id INTEGER, other INTEGER);
+
+statement ok
+INSERT INTO parent VALUES (1), (2);
+
+statement ok
+INSERT INTO child VALUES (1, 2), (NULL, NULL);
+
+statement ok
+ALTER TABLE child ADD CONSTRAINT "Parent Link" FOREIGN KEY (id) REFERENCES parent(id);
+
+query I
+SELECT constraint_name FROM duckdb_constraints() WHERE table_name = 'child';
+----
+Parent Link
+
+statement error
+INSERT INTO child VALUES (3, NULL);
+----
+Violates foreign key constraint
+
+statement error
+UPDATE child SET id = 3 WHERE id = 1;
+----
+Violates foreign key constraint
+
+statement error
+DELETE FROM parent WHERE id = 1;
+----
+Violates foreign key constraint
+
+statement error
+UPDATE parent SET id = 3 WHERE id = 1;
+----
+Violates foreign key constraint
+
+statement error
+ALTER TABLE child ADD CONSTRAINT "PARENT LINK" FOREIGN KEY (other) REFERENCES parent(id);
+----
+Duplicate constraint name
+
+statement ok
+ALTER TABLE child ADD FOREIGN KEY (other) REFERENCES parent;
+
+query I
+SELECT count(*) FROM duckdb_constraints() WHERE table_name = 'child' AND constraint_type = 'FOREIGN KEY';
+----
+2
+
+statement ok
+ALTER TABLE child ADD COLUMN extra INTEGER;
+
+statement error
+ALTER TABLE child RENAME COLUMN id TO renamed;
+----
+foreign key constraint
+
+statement ok
+ALTER TABLE child RENAME COLUMN extra TO renamed;
+
+query I
+SELECT count(*) FROM duckdb_constraints() WHERE table_name = 'child' AND constraint_name = 'Parent Link';
+----
+1
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE child DROP CONSTRAINT "parent link";
+
+statement ok
+INSERT INTO child VALUES (99, NULL, NULL);
+
+statement ok
+ROLLBACK;
+
+statement error
+INSERT INTO child VALUES (99, NULL, NULL);
+----
+Violates foreign key constraint
+
+statement ok
+ALTER TABLE child DROP CONSTRAINT "Parent Link";
+
+statement ok
+INSERT INTO child VALUES (99, NULL, NULL);
+
+statement error
+INSERT INTO child VALUES (NULL, 99, NULL);
+----
+Violates foreign key constraint
+
+statement ok
+ALTER TABLE child DROP CONSTRAINT child_other_id_fkey;
+
+statement ok
+ALTER TABLE child DROP CONSTRAINT IF EXISTS missing;
+
+statement error
+ALTER TABLE child DROP CONSTRAINT missing;
+----
+does not exist
+
+statement ok
+DROP TABLE parent;
+
+statement ok
+CREATE SCHEMA keys;
+
+statement ok
+CREATE TABLE keys.parent(a INTEGER, b VARCHAR, PRIMARY KEY(a, b));
+
+statement ok
+CREATE TABLE keys.child(a INTEGER, b VARCHAR);
+
+statement ok
+INSERT INTO keys.parent VALUES (1, 'one'), (2, 'two');
+
+statement ok
+INSERT INTO keys.child VALUES (1, 'one'), (NULL, 'missing'), (3, NULL), (NULL, NULL);
+
+statement ok
+ALTER TABLE keys.child ADD CONSTRAINT composite FOREIGN KEY (a, b) REFERENCES keys.parent(a, b);
+
+statement error
+INSERT INTO keys.child VALUES (1, 'two');
+----
+Violates foreign key constraint
+
+statement ok
+ALTER TABLE keys.child DROP CONSTRAINT composite;
+
+statement ok
+INSERT INTO keys.child VALUES (1, 'two');
+
+statement error
+ALTER TABLE keys.child ADD CONSTRAINT invalid_data FOREIGN KEY (a, b) REFERENCES keys.parent(a, b);
+----
+Violates foreign key constraint
+
+query I
+SELECT count(*) FROM duckdb_constraints() WHERE schema_name = 'keys' AND table_name = 'child';
+----
+0
+
+statement ok
+DELETE FROM keys.child WHERE a = 1 AND b = 'two';
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO keys.child VALUES (2, 'two');
+
+statement ok
+ALTER TABLE keys.child ADD CONSTRAINT valid_local FOREIGN KEY (a, b) REFERENCES keys.parent(a, b);
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM duckdb_constraints() WHERE schema_name = 'keys' AND table_name = 'child';
+----
+0
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO keys.child VALUES (5, 'invalid');
+
+statement error
+ALTER TABLE keys.child ADD FOREIGN KEY (a, b) REFERENCES keys.parent(a, b);
+----
+Violates foreign key constraint
+
+statement ok
+ROLLBACK;
+
+statement ok
+CREATE TABLE strings_parent(id VARCHAR PRIMARY KEY);
+
+statement ok
+CREATE TABLE strings_child(id VARCHAR CONSTRAINT original REFERENCES strings_parent(id));
+
+statement ok
+ALTER TABLE strings_child DROP CONSTRAINT original;
+
+statement ok
+INSERT INTO strings_parent VALUES ('key');
+
+statement ok
+INSERT INTO strings_child VALUES ('key'), (NULL);
+
+statement ok
+ALTER TABLE strings_child ADD FOREIGN KEY(id) REFERENCES strings_parent;
+
+statement error
+INSERT INTO strings_child VALUES ('missing');
+----
+Violates foreign key constraint
+
+statement error
+ALTER TABLE strings_child ADD CONSTRAINT missing_table FOREIGN KEY(id) REFERENCES nonexistent(id);
+----
+does not exist
+
+statement error
+ALTER TABLE strings_child ADD FOREIGN KEY(missing) REFERENCES strings_parent(id);
+----
+missing
+
+statement error
+ALTER TABLE strings_child ADD FOREIGN KEY(id) REFERENCES strings_parent(missing);
+----
+missing
+
+statement ok
+CREATE TABLE nonunique(id VARCHAR);
+
+statement error
+ALTER TABLE strings_child ADD FOREIGN KEY(id) REFERENCES nonunique(id);
+----
+unique
+
+statement ok
+CREATE TABLE keys.wrong_parent(id VARCHAR PRIMARY KEY);
+
+statement error
+ALTER TABLE keys.child ADD FOREIGN KEY(a) REFERENCES keys.wrong_parent(id);
+----
+incompatible
+
+statement error
+ALTER TABLE child ADD CHECK(id > 0);
+----
+No support for adding CHECK constraints
+
+statement error
+ALTER TABLE keys.parent DROP CONSTRAINT keys_parent_a_b_pkey;
+----
+does not exist
+
+statement ok
+CREATE TABLE selfref(id INTEGER PRIMARY KEY, parent INTEGER);
+
+statement ok
+INSERT INTO selfref VALUES (1, NULL), (2, 1);
+
+statement ok
+ALTER TABLE selfref ADD CONSTRAINT selflink FOREIGN KEY(parent) REFERENCES selfref(id);
+
+statement error
+DELETE FROM selfref WHERE id = 1;
+----
+Violates foreign key constraint
+
+statement ok
+ALTER TABLE selfref DROP CONSTRAINT selflink;
+
+statement ok
+DELETE FROM selfref WHERE id = 1;
+
+statement ok
+UPDATE selfref SET parent = NULL;
+
+statement ok
+ALTER TABLE selfref ADD CONSTRAINT selflink FOREIGN KEY(parent) REFERENCES selfref(id);
+
+statement ok
+ALTER TABLE selfref RENAME TO renamed_selfref;
+
+statement error
+INSERT INTO renamed_selfref VALUES (3, 99);
+----
+Violates foreign key constraint
+
+statement ok
+ALTER TABLE renamed_selfref DROP CONSTRAINT selflink;
+
+statement ok
+CREATE TABLE collision_parent(id INTEGER PRIMARY KEY);
+
+statement ok
+CREATE TABLE collision_child(id INTEGER, CONSTRAINT collision_child_id_id_fkey CHECK(id > 0));
+
+statement ok
+ALTER TABLE collision_child ADD FOREIGN KEY(id) REFERENCES collision_parent(id);
+
+statement ok
+ALTER TABLE collision_child ADD FOREIGN KEY(id) REFERENCES collision_parent(id);
+
+query I rowsort
+SELECT constraint_name FROM duckdb_constraints() WHERE table_name = 'collision_child';
+----
+collision_child_id_id_fkey
+collision_child_id_id_fkey_2
+collision_child_id_id_fkey_3
+
+statement ok
+ALTER TABLE collision_child DROP CONSTRAINT collision_child_id_id_fkey_2;
+
+statement error
+ALTER TABLE collision_child DROP CONSTRAINT collision_child_id_id_fkey;
+----
+Only foreign key constraints can be dropped
+
+statement ok
+CREATE TABLE quoted_child(id INTEGER, CONSTRAINT "a""b" FOREIGN KEY(id) REFERENCES collision_parent(id));
+
+query I
+SELECT constraint_name FROM duckdb_constraints() WHERE table_name = 'quoted_child';
+----
+a"b
+
+statement ok
+ALTER TABLE quoted_child DROP CONSTRAINT "a""b";
+
+statement ok
+INSERT INTO quoted_child VALUES (99);
+
+statement ok
+INSERT INTO collision_parent VALUES (1);
+
+statement ok
+INSERT INTO collision_child VALUES (1);
+
+statement ok
+ALTER TABLE collision_child DROP CONSTRAINT collision_child_id_id_fkey_3;
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO collision_child VALUES (99);
+
+statement ok
+DELETE FROM collision_child WHERE id = 99;
+
+statement ok
+ALTER TABLE collision_child ADD CONSTRAINT after_delete FOREIGN KEY(id) REFERENCES collision_parent(id);
+
+statement ok
+COMMIT;
+
+statement ok
+CREATE TABLE failure_parent(id INTEGER PRIMARY KEY);
+
+statement ok
+CREATE TABLE failure_child(id INTEGER);
+
+statement ok
+INSERT INTO failure_child VALUES (99);
+
+statement error
+ALTER TABLE failure_child ADD CONSTRAINT failed_link FOREIGN KEY(id) REFERENCES failure_parent(id);
+----
+Violates foreign key constraint
+
+statement ok
+INSERT INTO failure_child VALUES (100);
+
+statement ok
+DROP TABLE failure_parent;

@@ -81,6 +81,7 @@ public:
 	          optional_ptr<BoundConstraint> constraint_to_verify = nullptr);
 	//! Constructs a DataTable as a delta on an existing data table but with one column added new constraint
 	DataTable(ClientContext &context, DataTable &parent, BoundConstraint &constraint);
+	DataTable(ClientContext &context, DataTable &parent);
 
 	//! A reference to the database instance
 	AttachedDatabase &db;
@@ -319,6 +320,8 @@ private:
 	void VerifyForeignKeyConstraint(optional_ptr<LocalTableStorage> storage,
 	                                const BoundForeignKeyConstraint &bound_foreign_key, ClientContext &context,
 	                                DataChunk &chunk, VerifyExistenceType type);
+
+public:
 	void VerifyAppendForeignKeyConstraint(optional_ptr<LocalTableStorage> storage,
 	                                      const BoundForeignKeyConstraint &bound_foreign_key, ClientContext &context,
 	                                      DataChunk &chunk);

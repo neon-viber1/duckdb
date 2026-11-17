@@ -526,13 +526,30 @@ private:
 
 } // namespace
 
-vector<shared_ptr<const IndexStorageInfo>> TableIndexList::Checkpoint(TableIndexWriter &writer) {
+vector<shared_ptr<const IndexStorageInfo>> TableIndexList::Checkpoint(TableIndexWriter &writer,
+                                                                      const vector<idx_t> &constraint_oids) {
 	annotated_lock_guard lock(index_entries_lock);
 
 	vector<shared_ptr<const IndexStorageInfo>> infos;
 	infos.reserve(index_entries.size());
 
-	for (const auto &entry : index_entries) {
+	vector<shared_ptr<IndexEntry>> ordered_entries;
+	unordered_set<idx_t> seen;
+	for (auto oid : constraint_oids) {
+		for (auto &entry : index_entries) {
+			if (entry->GetIndexOid() == oid) {
+				ordered_entries.push_back(entry);
+				seen.insert(oid);
+				break;
+			}
+		}
+	}
+	for (auto &entry : index_entries) {
+		if (seen.find(entry->GetIndexOid()) == seen.end()) {
+			ordered_entries.push_back(entry);
+		}
+	}
+	for (const auto &entry : ordered_entries) {
 		auto checkpoint = entry->Checkpoint(writer);
 		if (checkpoint.shadow_index) {
 			writer.AddPendingPublication(make_uniq<PendingIndexPublication>(entry, std::move(checkpoint.shadow_index)));

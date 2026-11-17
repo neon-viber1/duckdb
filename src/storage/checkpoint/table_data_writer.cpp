@@ -20,6 +20,7 @@
 #include "duckdb/storage/table/table_index_list.hpp"
 #include "duckdb/storage/table/table_statistics.hpp"
 #include "duckdb/storage/data_table.hpp"
+#include "duckdb/parser/constraints/foreign_key_constraint.hpp"
 
 namespace duckdb {
 
@@ -41,6 +42,18 @@ TableDataWriter::~TableDataWriter() {
 void TableDataWriter::WriteTableData(Serializer &metadata_serializer) {
 	// start scanning the table and append the data to the uncompressed segments
 	table.GetStorage().Checkpoint(*this, metadata_serializer);
+}
+
+vector<idx_t> TableDataWriter::GetConstraintIndexOids() const {
+	vector<idx_t> result;
+	for (auto &constraint : table.GetConstraints()) {
+		if (constraint->type == ConstraintType::UNIQUE ||
+		    (constraint->type == ConstraintType::FOREIGN_KEY &&
+		     constraint->Cast<ForeignKeyConstraint>().info.IsAppendConstraint())) {
+			result.push_back(constraint->GetBackingIndexOid());
+		}
+	}
+	return result;
 }
 
 void TableDataWriter::AddPendingPublication(unique_ptr<PendingPublication> publication) {

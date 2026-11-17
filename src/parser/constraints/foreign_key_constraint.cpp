@@ -18,6 +18,9 @@ string ForeignKeyConstraint::ToString() const {
 	if (info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE ||
 	    info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE) {
 		string base = "FOREIGN KEY (";
+		if (!name.empty()) {
+			base = "CONSTRAINT " + SQLIdentifier(name) + " " + base;
+		}
 
 		for (idx_t i = 0; i < fk_columns.size(); i++) {
 			if (i > 0) {

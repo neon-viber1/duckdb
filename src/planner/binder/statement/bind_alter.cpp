@@ -5,6 +5,9 @@
 #include "duckdb/execution/index/art/art.hpp"
 #include "duckdb/function/table/table_scan.hpp"
 #include "duckdb/parser/constraints/unique_constraint.hpp"
+#include "duckdb/parser/constraints/foreign_key_constraint.hpp"
+#include "duckdb/parser/parsed_data/create_table_info.hpp"
+#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/parsed_data/alter_schema_info.hpp"
@@ -41,19 +44,36 @@ BoundStatement Binder::BindAlterAddIndex(BoundStatement &result, CatalogEntry &e
 	auto &table = entry.Cast<TableCatalogEntry>();
 	auto &column_list = table.GetColumns();
 
-	auto bound_constraint =
-	    BindUniqueConstraint(*constraint_info.constraint, table_info.GetQualifiedName().Name(), column_list);
-	VerifyConstraintCheckModeStorageVersion(*constraint_info.constraint, table.ParentCatalog(), table.temporary);
-	auto &bound_unique = bound_constraint->Cast<BoundUniqueConstraint>();
-	auto &unique_constraint = constraint_info.constraint->Cast<UniqueConstraint>();
+	vector<PhysicalIndex> keys;
+	Identifier index_name;
+	IndexConstraintType index_constraint_type;
+	if (constraint_info.constraint->type == ConstraintType::UNIQUE) {
+		auto bound_constraint =
+		    BindUniqueConstraint(*constraint_info.constraint, table_info.GetQualifiedName().Name(), column_list);
+		VerifyConstraintCheckModeStorageVersion(*constraint_info.constraint, table.ParentCatalog(), table.temporary);
+		auto &unique_constraint = constraint_info.constraint->Cast<UniqueConstraint>();
+		keys = bound_constraint->Cast<BoundUniqueConstraint>().keys;
+		index_name = unique_constraint.GetName(table_info.GetQualifiedName().Name());
+		index_constraint_type = unique_constraint.GetIndexConstraintType();
+	} else {
+		auto create_info = table.GetInfo();
+		create_info->Cast<CreateTableInfo>().constraints.push_back(constraint_info.constraint->Copy());
+		auto foreign_key_binder = Binder::CreateBinder(context);
+		auto bound = foreign_key_binder->BindCreateTableInfo(std::move(create_info), table.schema);
+		constraint_info.constraint = bound->Base().constraints.back()->Copy();
+		auto &fk = constraint_info.constraint->Cast<ForeignKeyConstraint>();
+		keys = fk.info.fk_keys;
+		index_name = fk.name;
+		index_constraint_type = IndexConstraintType::FOREIGN;
+	}
 
 	// Create the CreateIndexInfo.
 	auto create_index_info = make_uniq<CreateIndexInfo>();
 	create_index_info->table = table_info.GetQualifiedName().Name();
 	create_index_info->index_type = ART::TYPE_NAME;
-	create_index_info->constraint_type = unique_constraint.GetIndexConstraintType();
+	create_index_info->constraint_type = index_constraint_type;
 
-	for (const auto &physical_index : bound_unique.keys) {
+	for (const auto &physical_index : keys) {
 		auto &col = column_list.GetColumn(physical_index);
 		unique_ptr<ParsedExpression> parsed =
 		    make_uniq<ColumnRefExpression>(col.GetName(), table_info.GetQualifiedName().Name());
@@ -61,7 +81,6 @@ BoundStatement Binder::BindAlterAddIndex(BoundStatement &result, CatalogEntry &e
 		create_index_info->parsed_expressions.push_back(parsed->Copy());
 	}
 
-	auto index_name = unique_constraint.GetName(table_info.GetQualifiedName().Name());
 	create_index_info->SetIndexName(index_name);
 	D_ASSERT(!create_index_info->GetIndexName().empty());
 
@@ -199,7 +218,7 @@ BoundStatement Binder::Bind(AlterStatement &stmt) {
 	properties.RegisterDBModify(catalog, context, stmt.info->GetModifications());
 	stmt.info->SetQualifiedName(entry->ParentSchema().GetQualifiedName(stmt.info->GetQualifiedName().Name()));
 
-	if (!stmt.info->IsAddUniqueConstraint()) {
+	if (!stmt.info->IsAddIndexConstraint()) {
 		result.plan = make_uniq<LogicalAlter>(std::move(stmt.info));
 		return result;
 	}

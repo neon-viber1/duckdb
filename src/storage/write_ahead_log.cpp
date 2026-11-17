@@ -525,15 +525,15 @@ void WriteAheadLog::WriteAlter(CatalogEntry &entry, const AlterInfo &info) {
 	WriteAheadLogSerializer serializer(*this, WALType::ALTER_INFO);
 	serializer.WriteProperty(101, "info", &info);
 
-	if (!info.IsAddUniqueConstraint()) {
+	if (!info.IsAddIndexConstraint()) {
 		return serializer.End();
 	}
 
 	auto &table = entry.Cast<DuckTableEntry>();
 	auto &parent = entry.Parent().Cast<DuckTableEntry>();
-	auto added_oids = parent.GetAddedUniqueIndexOids(table);
+	auto added_oids = parent.GetAddedConstraintIndexOids(table);
 	if (added_oids.size() != 1) {
-		throw InternalException("WriteAlter: expected one added UNIQUE constraint on table %s, found %llu", parent.name,
+		throw InternalException("WriteAlter: expected one added index constraint on table %s, found %llu", parent.name,
 		                        added_oids.size());
 	}
 	auto &list = parent.GetStorage().GetDataTableInfo()->GetIndexes();

@@ -1853,6 +1853,7 @@ IdentifierType:
     - TriggerName
     - DropSecretStorage
     - ConstraintName
+    - ConstraintNameClause
     - ExplainOptionName
     - DotIdentifier
     - IdentifierDot
@@ -2079,7 +2080,6 @@ excluded_rules:
   - CharacterType
   - IntervalNumber
   - AtTimeZoneOperator
-  - ConstraintNameClause
   - UsingSample
   - TableSample
   - NamedParameterAssignment

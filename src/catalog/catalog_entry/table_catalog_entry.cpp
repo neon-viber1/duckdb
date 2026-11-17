@@ -120,6 +120,7 @@ string TableCatalogEntry::ColumnsToSQL(const ColumnList &columns, const vector<u
 
 	// find all columns that have NOT NULL specified, but are NOT primary key columns
 	logical_index_set_t not_null_columns;
+	logical_index_map_t<Identifier> not_null_names;
 	logical_index_map_t<vector<ConstraintCheckMode>> unique_columns;
 	logical_index_map_t<vector<ConstraintCheckMode>> pk_columns;
 	identifier_set_t multi_key_pks;
@@ -128,9 +129,10 @@ string TableCatalogEntry::ColumnsToSQL(const ColumnList &columns, const vector<u
 		if (constraint->type == ConstraintType::NOT_NULL) {
 			auto &not_null = constraint->Cast<NotNullConstraint>();
 			not_null_columns.insert(not_null.index);
+			not_null_names[not_null.index] = constraint->name;
 		} else if (constraint->type == ConstraintType::UNIQUE) {
 			auto &pk = constraint->Cast<UniqueConstraint>();
-			if (pk.HasIndex()) {
+			if (pk.HasIndex() && pk.name.empty()) {
 				// no columns specified: single column constraint
 				if (pk.IsPrimaryKey()) {
 					pk_columns[pk.GetIndex()].push_back(pk.check_mode);
@@ -169,6 +171,9 @@ string TableCatalogEntry::ColumnsToSQL(const ColumnList &columns, const vector<u
 		bool is_unique = unique_columns.find(column.Logical()) != unique_columns.end();
 		if (not_null && !is_single_key_pk && !is_multi_key_pk) {
 			// NOT NULL but not a primary key column
+			if (!not_null_names.at(column.Logical()).empty()) {
+				ss << " CONSTRAINT " << SQLIdentifier(not_null_names.at(column.Logical()));
+			}
 			ss << " NOT NULL";
 		}
 		if (is_single_key_pk) {

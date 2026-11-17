@@ -186,6 +186,7 @@ PEGTransformerFactory::TransformCreateTableColumnList(PEGTransformer &transforme
 					    make_uniq<UniqueConstraint>(column_index, column_result.column_definition.GetName(),
 					                                constraint_type.is_primary_key, constraint_type.check_mode));
 				}
+				result.constraints.back()->name = constraint_type.name;
 			}
 			result.columns.AddColumn(std::move(column_result.column_definition));
 		} else {
@@ -350,9 +351,18 @@ ColumnConstraintEntry PEGTransformerFactory::TransformDefaultValue(PEGTransforme
 }
 
 unique_ptr<Constraint>
-PEGTransformerFactory::TransformTopLevelConstraint(PEGTransformer &transformer, const bool &has_result,
+PEGTransformerFactory::TransformTopLevelConstraint(PEGTransformer &transformer,
+                                                   const optional<Identifier> &constraint_name,
                                                    unique_ptr<Constraint> top_level_constraint_list) {
+	if (constraint_name) {
+		top_level_constraint_list->name = *constraint_name;
+	}
 	return top_level_constraint_list;
+}
+
+Identifier PEGTransformerFactory::TransformConstraintNameClause(PEGTransformer &transformer,
+                                                                const Identifier &constraint_name) {
+	return constraint_name;
 }
 
 unique_ptr<Constraint> PEGTransformerFactory::TransformTopCheckConstraint(PEGTransformer &transformer,
@@ -509,10 +519,13 @@ ConstraintCheckMode PEGTransformerFactory::TransformDeferredConstraint(PEGTransf
 	return ConstraintCheckMode::DEFERRED;
 }
 
-// Column constraint names are parsed but not stored
-ColumnConstraintEntry PEGTransformerFactory::TransformNameableColumnConstraint(PEGTransformer &transformer,
-                                                                               const bool &has_result,
-                                                                               ColumnConstraintEntry child) {
+ColumnConstraintEntry PEGTransformerFactory::TransformNameableColumnConstraint(
+    PEGTransformer &transformer, const optional<Identifier> &constraint_name, ColumnConstraintEntry child) {
+	if (constraint_name && child.constraint) {
+		child.constraint->name = *constraint_name;
+	} else if (constraint_name) {
+		child.constraint_type_info.name = *constraint_name;
+	}
 	return child;
 }
 

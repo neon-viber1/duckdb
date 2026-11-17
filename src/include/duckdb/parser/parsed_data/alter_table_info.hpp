@@ -93,6 +93,7 @@ enum class AlterTableType : uint8_t {
 	RENAME_FIELD = 16,
 	SET_TABLE_OPTIONS = 17,
 	RESET_TABLE_OPTIONS = 18,
+	DROP_CONSTRAINT = 19,
 };
 
 struct AlterTableInfo : public AlterInfo {
@@ -362,6 +363,7 @@ struct AlterForeignKeyInfo : public AlterTableInfo {
 	vector<PhysicalIndex> pk_keys;
 	vector<PhysicalIndex> fk_keys;
 	AlterForeignKeyType type;
+	Identifier constraint_name;
 
 public:
 	unique_ptr<AlterInfo> Copy() const override;
@@ -476,6 +478,20 @@ private:
 //===--------------------------------------------------------------------===//
 // SetPartitionedByInfo
 //===--------------------------------------------------------------------===//
+struct DropConstraintInfo : public AlterTableInfo {
+	DropConstraintInfo(const AlterEntryData &data, Identifier constraint_name, bool if_exists);
+	Identifier constraint_name;
+	bool if_exists;
+
+	unique_ptr<AlterInfo> Copy() const override;
+	string ToString() const override;
+	void Serialize(Serializer &serializer) const override;
+	static unique_ptr<AlterTableInfo> Deserialize(Deserializer &deserializer);
+
+private:
+	DropConstraintInfo();
+};
+
 struct SetPartitionedByInfo : public AlterTableInfo {
 	SetPartitionedByInfo(const AlterEntryData &data, vector<unique_ptr<ParsedExpression>> partition_keys);
 	~SetPartitionedByInfo() override;
