@@ -31,9 +31,6 @@ unique_ptr<CreateStatement> PEGTransformerFactory::TransformCreateIndexStmt(
 				expr = make_uniq<ColumnRefExpression>(std::move(column_name), base_table_name->Table());
 			}
 		}
-		if (expr->GetExpressionType() == ExpressionType::COLLATE) {
-			throw NotImplementedException("Index with collation not supported yet!");
-		}
 		index_info->expressions.push_back(expr->Copy());
 		index_info->parsed_expressions.push_back(std::move(expr));
 	}

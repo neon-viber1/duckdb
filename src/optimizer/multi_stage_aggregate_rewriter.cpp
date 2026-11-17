@@ -639,6 +639,21 @@ static unique_ptr<LogicalOperator> JoinBranches(const vector<BranchResult> &bran
 
 } // namespace
 
+bool MultiStageAggregateRewriter::NeedsCollationRewrite(ClientContext &context,
+                                                        const BoundAggregateExpression &aggregate) {
+	if (!aggregate.IsDistinct() ||
+	    aggregate.Function().GetCollationHandling() == FunctionCollationHandling::PUSH_DISTINCT_COLLATIONS) {
+		return false;
+	}
+	for (auto &child : aggregate.GetChildren()) {
+		auto key = child->Copy();
+		if (ExpressionBinder::PushCollation(context, key, key->GetReturnType())) {
+			return true;
+		}
+	}
+	return false;
+}
+
 bool MultiStageAggregateRewriter::ShouldRewrite(const BoundAggregateExpression &aggregate,
                                                 const LogicalAggregate &op) const {
 	if (!aggregate.Function().HasRewriteCallback() ||
@@ -708,7 +723,7 @@ bool MultiStageAggregateRewriter::TryRewrite(unique_ptr<LogicalOperator> &op) {
 			return false;
 		}
 		auto &aggregate = expr->Cast<BoundAggregateExpression>();
-		if (rewrite_distinct && aggregate.IsDistinct()) {
+		if ((rewrite_distinct && aggregate.IsDistinct()) || NeedsCollationRewrite(optimizer.GetContext(), aggregate)) {
 			has_rewrite = true;
 			continue;
 		}
@@ -747,7 +762,8 @@ bool MultiStageAggregateRewriter::TryRewrite(unique_ptr<LogicalOperator> &op) {
 			}
 			continue;
 		}
-		if (!rewrite_distinct || !aggregate.IsDistinct()) {
+		if ((!rewrite_distinct || !aggregate.IsDistinct()) &&
+		    !NeedsCollationRewrite(optimizer.GetContext(), aggregate)) {
 			regular_aggregates.push_back(aggregate_idx);
 			continue;
 		}

@@ -224,6 +224,17 @@ static bool PushNestedCollation(ClientContext &context, unique_ptr<Expression> &
 	return true;
 }
 
+vector<string> CollationBinding::GetCollationFunctions(ClientContext &context, const LogicalType &sql_type,
+                                                       CollationType type) const {
+	for (auto &collation : collations) {
+		auto functions = collation.get_collation_functions(context, sql_type, type);
+		if (!functions.empty()) {
+			return functions;
+		}
+	}
+	return {};
+}
+
 bool CollationBinding::PushCollation(ClientContext &context, unique_ptr<Expression> &source,
                                      const LogicalType &sql_type, CollationType type) const {
 	// Leave collation of aliased structs, lists and arrays to the registered callbacks.
@@ -238,18 +249,11 @@ bool CollationBinding::PushCollation(ClientContext &context, unique_ptr<Expressi
 			return PushNestedCollation(context, source, ArrayType::GetChildType(sql_type), type, *this);
 		}
 	}
-	for (auto &collation : collations) {
-		auto functions = collation.get_collation_functions(context, sql_type, type);
-		if (functions.empty()) {
-			continue;
-		}
-		// successfully retrieved the collation functions - apply them to the source expression
-		for (auto &function_name : functions) {
-			source = ApplyCollationFunction(context, function_name, std::move(source));
-		}
-		return true;
+	auto functions = GetCollationFunctions(context, sql_type, type);
+	for (auto &function_name : functions) {
+		source = ApplyCollationFunction(context, function_name, std::move(source));
 	}
-	return false;
+	return !functions.empty();
 }
 
 } // namespace duckdb

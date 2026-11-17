@@ -8,6 +8,7 @@
 #include "duckdb/optimizer/aggregate_rewrite_helper.hpp"
 #include "duckdb/function/builtin_function_lookup.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
+#include "duckdb/optimizer/multi_stage_aggregate_rewriter.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -240,6 +241,9 @@ bool GroupingSetsOptimizer::TryRewriteGroupingSets(unique_ptr<LogicalOperator> &
 				return false;
 			}
 			auto &aggregate = expr->Cast<BoundAggregateExpression>();
+			if (MultiStageAggregateRewriter::NeedsCollationRewrite(optimizer.GetContext(), aggregate)) {
+				return TryExpandGroupingSets(op);
+			}
 			if (aggregate.Function().HasRewriteCallback() &&
 			    aggregate.Function().GetRewritePolicy() == AggregateRewritePolicy::MANDATORY &&
 			    aggregate.StateExportMode() != AggregateStateExportMode::STATE_EXPORT) {

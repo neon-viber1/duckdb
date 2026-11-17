@@ -1,0 +1,218 @@
+# name: test/sql/index/collated_index.test
+# description: Collated indexes use the same keys for scans, writes, uniqueness, and restart
+# group: [index]
+
+load {TEST_DIR}/collated_index.db
+
+statement ok
+SET debug_verify_serializer = true;
+
+statement ok
+CREATE TABLE indexed(s VARCHAR COLLATE NOCASE);
+
+statement ok
+INSERT INTO indexed SELECT 'Value' || i FROM range(10000) t(i);
+
+statement ok
+INSERT INTO indexed VALUES ('HÉLLO'), ('héllo'), (NULL), ('');
+
+statement ok
+CREATE TABLE scanned AS SELECT * FROM indexed;
+
+statement ok
+CREATE INDEX collated ON indexed(s);
+
+query II
+EXPLAIN ANALYZE SELECT s FROM indexed WHERE s = 'value42';
+----
+analyzed_plan	<REGEX>:.*Type: Index Scan.*
+
+query I
+SELECT s FROM indexed WHERE s = 'value42';
+----
+Value42
+
+query I
+SELECT (SELECT list(s ORDER BY s COLLATE "binary") FROM indexed WHERE s = 'HÉLLO' OR s BETWEEN 'value100' AND 'value102') IS NOT DISTINCT FROM (SELECT list(s ORDER BY s COLLATE "binary") FROM scanned WHERE s = 'HÉLLO' OR s BETWEEN 'value100' AND 'value102');
+----
+true
+
+query II
+EXPLAIN ANALYZE SELECT s FROM indexed WHERE s BETWEEN 'value100' AND 'value102';
+----
+analyzed_plan	<REGEX>:.*Type: Index Scan.*
+
+query II
+EXPLAIN ANALYZE SELECT s FROM indexed WHERE s COLLATE "binary" = 'Value42';
+----
+analyzed_plan	<REGEX>:.*Type: Sequential Scan.*
+
+statement ok
+CREATE TABLE binary_strings(s VARCHAR);
+
+statement ok
+INSERT INTO binary_strings SELECT 'Value' || i FROM range(10000) t(i);
+
+statement ok
+CREATE INDEX binary_index ON binary_strings(s);
+
+query II
+EXPLAIN ANALYZE SELECT s FROM binary_strings WHERE s COLLATE NOCASE = 'value42';
+----
+analyzed_plan	<REGEX>:.*Type: Sequential Scan.*
+
+query I
+SELECT s FROM binary_strings WHERE s COLLATE NOCASE = 'value42';
+----
+Value42
+
+statement ok
+CREATE TABLE accent_strings(s VARCHAR COLLATE NOCASE.NOACCENT);
+
+statement ok
+INSERT INTO accent_strings VALUES ('HÉLLO'), ('hello'), ('Z'), (NULL), ('');
+
+statement ok
+CREATE TABLE accent_scan AS SELECT * FROM accent_strings;
+
+statement ok
+CREATE INDEX accent_index ON accent_strings(s);
+
+query I
+SELECT (SELECT list(s ORDER BY s COLLATE "binary") FROM accent_strings WHERE s >= 'hello') IS NOT DISTINCT FROM (SELECT list(s ORDER BY s COLLATE "binary") FROM accent_scan WHERE s >= 'hello');
+----
+true
+
+query I
+SELECT count(*) FROM accent_strings WHERE s = 'HELLO';
+----
+2
+
+statement ok
+CREATE TABLE unique_strings(s VARCHAR);
+
+statement ok
+INSERT INTO unique_strings VALUES ('HÉLLO'), ('hello');
+
+statement error
+CREATE UNIQUE INDEX duplicate_keys ON unique_strings(s COLLATE NOCASE.NOACCENT);
+----
+duplicates
+
+statement ok
+DELETE FROM unique_strings WHERE s = 'hello';
+
+statement ok
+CREATE UNIQUE INDEX unique_collated ON unique_strings(s COLLATE NOCASE.NOACCENT);
+
+statement error
+INSERT INTO unique_strings VALUES ('hello');
+----
+Duplicate key
+
+statement ok
+CREATE TABLE composite(s VARCHAR, n INTEGER);
+
+statement ok
+CREATE UNIQUE INDEX composite_collated ON composite(s COLLATE NOCASE, n);
+
+statement ok
+INSERT INTO composite VALUES ('ABC', 1), ('abc', 2), (NULL, 1), (NULL, 1);
+
+statement error
+INSERT INTO composite VALUES ('abc', 1);
+----
+Duplicate key
+
+statement ok
+CREATE TABLE expression_strings(s VARCHAR);
+
+statement ok
+CREATE UNIQUE INDEX expression_collated ON expression_strings((trim(s) COLLATE NOCASE));
+
+statement ok
+INSERT INTO expression_strings VALUES (' ABC ');
+
+statement error
+INSERT INTO expression_strings VALUES ('abc');
+----
+Duplicate key
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM unique_strings;
+
+statement ok
+INSERT INTO unique_strings VALUES ('hello');
+
+statement ok
+ROLLBACK;
+
+statement error
+INSERT INTO unique_strings VALUES ('hello');
+----
+Duplicate key
+
+statement ok
+UPDATE indexed SET s = 'Changed' WHERE s = 'value42';
+
+statement ok
+DELETE FROM indexed WHERE s = 'changed';
+
+statement ok
+INSERT INTO indexed VALUES ('VALUE42');
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT s FROM indexed WHERE s = 'value42';
+----
+VALUE42
+
+query II
+EXPLAIN ANALYZE SELECT s FROM indexed WHERE s = 'value42';
+----
+analyzed_plan	<REGEX>:.*Type: Index Scan.*
+
+statement error
+INSERT INTO unique_strings VALUES ('HELLO');
+----
+Duplicate key
+
+statement ok
+DELETE FROM unique_strings;
+
+statement ok
+INSERT INTO unique_strings VALUES ('hello');
+
+query T
+SELECT * FROM unique_strings;
+----
+hello
+
+statement ok
+SET default_collation = 'nocase';
+
+statement ok
+CREATE TABLE default_strings(s VARCHAR);
+
+statement ok
+CREATE UNIQUE INDEX default_collated ON default_strings(s);
+
+statement ok
+INSERT INTO default_strings VALUES ('ABC');
+
+statement ok
+RESET default_collation;
+
+restart
+
+statement error
+INSERT INTO default_strings VALUES ('abc');
+----
+Duplicate key

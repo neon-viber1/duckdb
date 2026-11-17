@@ -9,6 +9,7 @@
 #include "duckdb/function/scalar/string_common.hpp"
 #include "duckdb/function/scalar/string_functions.hpp"
 #include "duckdb/function/scalar/regexp.hpp"
+#include "duckdb/main/settings.hpp"
 #include "utf8proc_wrapper.hpp"
 
 #include "re2/re2.h"
@@ -165,6 +166,11 @@ unique_ptr<Expression> RegexOptimizationRule::Apply(LogicalOperator &op, vector<
 	auto &root = bindings[0].get().Cast<BoundFunctionExpression>();
 	auto &constant_expr = bindings[2].get().Cast<BoundConstantExpression>();
 	D_ASSERT(root.GetChildren().size() == 2 || root.GetChildren().size() == 3);
+	auto default_collation = StringUtil::Lower(Settings::Get<DefaultCollationSetting>(GetContext()));
+	if (!default_collation.empty() && default_collation != "binary" && default_collation != "c" &&
+	    default_collation != "posix") {
+		return nullptr;
+	}
 	for (idx_t i = 0; i < 2; i++) {
 		const auto &type = root.GetChildren()[i]->GetReturnType();
 		if (type.id() == LogicalTypeId::VARCHAR && !StringType::GetCollation(type).empty()) {

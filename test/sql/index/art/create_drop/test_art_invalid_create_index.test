@@ -13,12 +13,12 @@ CREATE INDEX ON integers(i)
 statement error
 CREATE INDEX i_index ON integers(i COLLATE "NOCASE")
 ----
-<REGEX>:.*Not implemented Error.*Index with collation not supported yet.*
+collations are only supported for type varchar
 
 statement error
 CREATE INDEX i_index ON integers(i COLLATE "de_DE")
 ----
-<REGEX>:.*Not implemented Error.*Index with collation not supported yet.*
+collations are only supported for type varchar
 
 statement error
 CREATE INDEX i_index ON integers using blabla(i)

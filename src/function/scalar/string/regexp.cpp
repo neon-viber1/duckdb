@@ -13,6 +13,7 @@
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/scalar/string_functions.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/main/settings.hpp"
 #include "re2/stringpiece.h"
 #include "utf8proc_wrapper.hpp"
 
@@ -103,6 +104,30 @@ unique_ptr<FunctionData> RegexpMatchesBind(BindScalarFunctionInput &input) {
 	D_ASSERT(arguments.size() == 2 || arguments.size() == 3);
 	RE2::Options options;
 	options.set_log_errors(false);
+	string collation;
+	for (idx_t argument_idx = 0; argument_idx < 2; argument_idx++) {
+		auto &argument_type = arguments[argument_idx]->GetReturnType();
+		auto argument_collation = StringType::GetCollation(argument_type);
+		if (!collation.empty() && !argument_collation.empty() && collation != argument_collation) {
+			throw BinderException("Cannot combine types with different collation!");
+		}
+		if (!argument_collation.empty()) {
+			collation = argument_collation;
+		}
+	}
+	if (collation.empty()) {
+		collation = Settings::Get<DefaultCollationSetting>(input.GetClientContext());
+	}
+	collation = StringUtil::Lower(collation);
+	bool nocase = !collation.empty();
+	for (auto &part : StringUtil::Split(collation, '.')) {
+		nocase &= part == "nocase";
+	}
+	if (nocase) {
+		options.set_case_sensitive(false);
+	} else if (!collation.empty() && collation != "binary" && collation != "c" && collation != "posix") {
+		throw BinderException("Regular expression matching only supports binary and NOCASE collations");
+	}
 	if (arguments.size() == 3) {
 		ParseRegexOptions(input.GetConstant(2), options);
 	}
@@ -110,7 +135,11 @@ unique_ptr<FunctionData> RegexpMatchesBind(BindScalarFunctionInput &input) {
 	string constant_string;
 	bool constant_pattern;
 	constant_pattern = TryParseConstantPattern(input.TryGetConstant(1), constant_string);
-	return make_uniq<RegexpMatchesBindData>(options, std::move(constant_string), constant_pattern);
+	auto result = make_uniq<RegexpMatchesBindData>(options, std::move(constant_string), constant_pattern);
+	if (!options.case_sensitive()) {
+		result->range_success = false;
+	}
+	return std::move(result);
 }
 
 struct RegexPartialMatch {
