@@ -28,6 +28,9 @@ UniqueConstraint::UniqueConstraint(vector<Identifier> columns, const bool is_pri
 
 string UniqueConstraint::ToString() const {
 	string base = is_primary_key ? "PRIMARY KEY(" : "UNIQUE(";
+	if (!name.empty()) {
+		base = "CONSTRAINT " + SQLIdentifier(name) + " " + base;
+	}
 	for (idx_t i = 0; i < columns.size(); i++) {
 		if (i > 0) {
 			base += ", ";

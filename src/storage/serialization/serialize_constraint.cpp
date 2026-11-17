@@ -11,10 +11,14 @@ namespace duckdb {
 
 void Constraint::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty<ConstraintType>(100, "type", type);
+	if (serializer.ShouldSerialize(StorageVersion::V2_0_0)) {
+		serializer.WritePropertyWithDefault<Identifier>(101, "name", name, Identifier());
+	}
 }
 
 unique_ptr<Constraint> Constraint::Deserialize(Deserializer &deserializer) {
 	auto type = deserializer.ReadProperty<ConstraintType>(100, "type");
+	auto name = deserializer.ReadPropertyWithExplicitDefault<Identifier>(101, "name", Identifier());
 	unique_ptr<Constraint> result;
 	switch (type) {
 	case ConstraintType::CHECK:
@@ -32,6 +36,7 @@ unique_ptr<Constraint> Constraint::Deserialize(Deserializer &deserializer) {
 	default:
 		throw SerializationException("Unsupported type for deserialization of Constraint!");
 	}
+	result->name = std::move(name);
 	return result;
 }
 

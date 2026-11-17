@@ -554,8 +554,10 @@ AlterForeignKeyInfo::~AlterForeignKeyInfo() {
 }
 
 unique_ptr<AlterInfo> AlterForeignKeyInfo::Copy() const {
-	return make_uniq_base<AlterInfo, AlterForeignKeyInfo>(GetAlterEntryData(), fk_table, pk_columns, fk_columns,
-	                                                      pk_keys, fk_keys, type);
+	auto result =
+	    make_uniq<AlterForeignKeyInfo>(GetAlterEntryData(), fk_table, pk_columns, fk_columns, pk_keys, fk_keys, type);
+	result->constraint_name = constraint_name;
+	return std::move(result);
 }
 
 string AlterForeignKeyInfo::ToString() const {
@@ -638,6 +640,23 @@ string AddConstraintInfo::ToString() const {
 //===--------------------------------------------------------------------===//
 // SetPartitionedByInfo
 //===--------------------------------------------------------------------===//
+DropConstraintInfo::DropConstraintInfo() : AlterTableInfo(AlterTableType::DROP_CONSTRAINT), if_exists(false) {
+}
+
+DropConstraintInfo::DropConstraintInfo(const AlterEntryData &data, Identifier constraint_name_p, bool if_exists_p)
+    : AlterTableInfo(AlterTableType::DROP_CONSTRAINT, data), constraint_name(std::move(constraint_name_p)),
+      if_exists(if_exists_p) {
+}
+
+unique_ptr<AlterInfo> DropConstraintInfo::Copy() const {
+	return make_uniq_base<AlterInfo, DropConstraintInfo>(GetAlterEntryData(), constraint_name, if_exists);
+}
+
+string DropConstraintInfo::ToString() const {
+	return "ALTER TABLE " + GetQualifiedName().ToString(QualifiedNameToStringMode::HIDE_DEFAULT_SCHEMA) +
+	       " DROP CONSTRAINT " + (if_exists ? "IF EXISTS " : "") + SQLIdentifier(constraint_name) + ";";
+}
+
 SetPartitionedByInfo::SetPartitionedByInfo() : AlterTableInfo(AlterTableType::SET_PARTITIONED_BY) {
 }
 

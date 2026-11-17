@@ -62,6 +62,7 @@ static void FindForeignKeyInformation(TableCatalogEntry &table, AlterForeignKeyT
 			fk_arrays.push_back(make_uniq<AlterForeignKeyInfo>(std::move(alter_data), name, fk.pk_columns,
 			                                                   fk.fk_columns, fk.info.pk_keys, fk.info.fk_keys,
 			                                                   alter_fk_type));
+			fk_arrays.back()->constraint_name = fk.name;
 		} else if (fk.info.type == ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE &&
 		           alter_fk_type == AlterForeignKeyType::AFT_DELETE) {
 			throw CatalogException("Could not drop the table because this table is main key table of the table %s",
@@ -322,6 +323,52 @@ optional_ptr<CatalogEntry> DuckSchemaEntry::CreatePragmaFunction(CatalogTransact
 
 void DuckSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 	CatalogType type = info.GetCatalogType();
+	if (info.type == AlterType::ALTER_TABLE && transaction.HasContext() &&
+	    info.bind_mode != AlterBindMode::SKIP_BINDING) {
+		auto &alter = info.Cast<AlterTableInfo>();
+		optional_ptr<const ForeignKeyConstraint> fk;
+		auto operation = AlterForeignKeyType::AFT_ADD;
+		if (alter.alter_table_type == AlterTableType::ADD_CONSTRAINT) {
+			auto &constraint = alter.Cast<AddConstraintInfo>().constraint;
+			if (constraint->type == ConstraintType::FOREIGN_KEY) {
+				fk = constraint->Cast<ForeignKeyConstraint>();
+			}
+		} else if (alter.alter_table_type == AlterTableType::DROP_CONSTRAINT) {
+			auto &drop = alter.Cast<DropConstraintInfo>();
+			auto entry = tables.GetEntry(transaction, info.GetQualifiedName().Name());
+			if (entry && entry->type == CatalogType::TABLE_ENTRY) {
+				for (auto &constraint : entry->Cast<TableCatalogEntry>().GetConstraints()) {
+					if (constraint->type == ConstraintType::FOREIGN_KEY && constraint->name == drop.constraint_name &&
+					    constraint->Cast<ForeignKeyConstraint>().info.IsAppendConstraint()) {
+						fk = constraint->Cast<ForeignKeyConstraint>();
+						operation = AlterForeignKeyType::AFT_DELETE;
+						break;
+					}
+				}
+			}
+		} else if (alter.alter_table_type == AlterTableType::RENAME_TABLE) {
+			auto entry = tables.GetEntry(transaction, info.GetQualifiedName().Name());
+			if (entry && entry->type == CatalogType::TABLE_ENTRY) {
+				vector<unique_ptr<AlterForeignKeyInfo>> relationships;
+				FindForeignKeyInformation(entry->Cast<TableCatalogEntry>(), AlterForeignKeyType::AFT_ADD,
+				                          relationships);
+				for (auto &relationship : relationships) {
+					relationship->type = AlterForeignKeyType::AFT_DELETE;
+					Alter(transaction, *relationship);
+					relationship->type = AlterForeignKeyType::AFT_ADD;
+					relationship->fk_table = alter.Cast<RenameTableInfo>().new_table_name;
+					Alter(transaction, *relationship);
+				}
+			}
+		}
+		if (fk && fk->info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE) {
+			AlterEntryData data(GetQualifiedName(fk->info.table), OnEntryNotFound::THROW_EXCEPTION);
+			AlterForeignKeyInfo reverse(data, info.GetQualifiedName().Name(), fk->pk_columns, fk->fk_columns,
+			                            fk->info.pk_keys, fk->info.fk_keys, operation);
+			reverse.constraint_name = fk->name;
+			Alter(transaction, reverse);
+		}
+	}
 
 	auto &set = GetCatalogSet(type);
 	if (info.type == AlterType::CHANGE_OWNERSHIP) {

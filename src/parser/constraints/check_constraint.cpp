@@ -1,4 +1,5 @@
 #include "duckdb/parser/constraints/check_constraint.hpp"
+#include "duckdb/parser/keyword_helper.hpp"
 
 namespace duckdb {
 
@@ -7,11 +8,13 @@ CheckConstraint::CheckConstraint(unique_ptr<ParsedExpression> expression)
 }
 
 string CheckConstraint::ToString() const {
-	return "CHECK(" + expression->ToString() + ")";
+	return (name.empty() ? "" : "CONSTRAINT " + SQLIdentifier(name) + " ") + "CHECK(" + expression->ToString() + ")";
 }
 
 unique_ptr<Constraint> CheckConstraint::Copy() const {
-	return make_uniq<CheckConstraint>(expression->Copy());
+	auto result = make_uniq<CheckConstraint>(expression->Copy());
+	result->name = name;
+	return std::move(result);
 }
 
 } // namespace duckdb

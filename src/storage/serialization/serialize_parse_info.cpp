@@ -164,6 +164,9 @@ unique_ptr<AlterInfo> AlterTableInfo::Deserialize(Deserializer &deserializer) {
 	case AlterTableType::ALTER_COLUMN_TYPE:
 		result = ChangeColumnTypeInfo::Deserialize(deserializer);
 		break;
+	case AlterTableType::DROP_CONSTRAINT:
+		result = DropConstraintInfo::Deserialize(deserializer);
+		break;
 	case AlterTableType::DROP_NOT_NULL:
 		result = DropNotNullInfo::Deserialize(deserializer);
 		break;
@@ -338,6 +341,9 @@ void AlterForeignKeyInfo::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<PhysicalIndex>>(403, "pk_keys", pk_keys);
 	serializer.WritePropertyWithDefault<vector<PhysicalIndex>>(404, "fk_keys", fk_keys);
 	serializer.WriteProperty<AlterForeignKeyType>(405, "alter_fk_type", type);
+	if (serializer.ShouldSerialize(StorageVersion::V2_0_0)) {
+		serializer.WritePropertyWithDefault<Identifier>(406, "constraint_name", constraint_name, Identifier());
+	}
 }
 
 unique_ptr<AlterTableInfo> AlterForeignKeyInfo::Deserialize(Deserializer &deserializer) {
@@ -348,6 +354,7 @@ unique_ptr<AlterTableInfo> AlterForeignKeyInfo::Deserialize(Deserializer &deseri
 	deserializer.ReadPropertyWithDefault<vector<PhysicalIndex>>(403, "pk_keys", result->pk_keys);
 	deserializer.ReadPropertyWithDefault<vector<PhysicalIndex>>(404, "fk_keys", result->fk_keys);
 	deserializer.ReadProperty<AlterForeignKeyType>(405, "alter_fk_type", result->type);
+	deserializer.ReadPropertyWithExplicitDefault<Identifier>(406, "constraint_name", result->constraint_name, Identifier());
 	return std::move(result);
 }
 
@@ -508,6 +515,19 @@ void DisconnectInfo::Serialize(Serializer &serializer) const {
 
 unique_ptr<ParseInfo> DisconnectInfo::Deserialize(Deserializer &deserializer) {
 	auto result = duckdb::unique_ptr<DisconnectInfo>(new DisconnectInfo());
+	return std::move(result);
+}
+
+void DropConstraintInfo::Serialize(Serializer &serializer) const {
+	AlterTableInfo::Serialize(serializer);
+	serializer.WritePropertyWithDefault<Identifier>(400, "constraint_name", constraint_name);
+	serializer.WritePropertyWithDefault<bool>(401, "if_exists", if_exists);
+}
+
+unique_ptr<AlterTableInfo> DropConstraintInfo::Deserialize(Deserializer &deserializer) {
+	auto result = duckdb::unique_ptr<DropConstraintInfo>(new DropConstraintInfo());
+	deserializer.ReadPropertyWithDefault<Identifier>(400, "constraint_name", result->constraint_name);
+	deserializer.ReadPropertyWithDefault<bool>(401, "if_exists", result->if_exists);
 	return std::move(result);
 }
 

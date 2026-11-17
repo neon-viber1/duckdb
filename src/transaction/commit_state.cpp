@@ -280,6 +280,11 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 
 		auto &new_entry = old_entry.Parent();
 		if (old_entry.type == CatalogType::TABLE_ENTRY && new_entry.type == CatalogType::TABLE_ENTRY) {
+			auto &old_table = old_entry.Cast<DuckTableEntry>();
+			auto &new_table = new_entry.Cast<DuckTableEntry>();
+			for (auto oid : old_table.GetAddedConstraintIndexOids(new_table)) {
+				info.drop_state->RemoveIndex(old_table.GetStorage().GetDataTableInfo()->GetIndexes(), oid);
+			}
 			auto &old_storage = old_entry.Cast<DuckTableEntry>().GetStorage();
 			auto &new_storage = new_entry.Cast<DuckTableEntry>().GetStorage();
 			if (!RefersToSameObject(old_storage, new_storage) && old_storage.IsMainTable()) {

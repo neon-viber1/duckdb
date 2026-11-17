@@ -10,9 +10,9 @@ SELECT constraint_type, constraint_text
 FROM duckdb_constraints()
 WHERE table_name = 't' AND constraint_type = 'FOREIGN KEY';
 ----
-FOREIGN KEY	FOREIGN KEY (parent) REFERENCES t(id)
+FOREIGN KEY	CONSTRAINT t_parent_id_fkey FOREIGN KEY (parent) REFERENCES t(id)
 
 query I
 SELECT sql FROM duckdb_tables() WHERE table_name = 't';
 ----
-CREATE TABLE t(id INTEGER PRIMARY KEY, parent INTEGER, FOREIGN KEY (parent) REFERENCES t(id));
+CREATE TABLE t(id INTEGER PRIMARY KEY, parent INTEGER, CONSTRAINT t_parent_id_fkey FOREIGN KEY (parent) REFERENCES t(id));

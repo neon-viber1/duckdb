@@ -188,6 +188,18 @@ DataTable::DataTable(ClientContext &context, DataTable &parent, BoundConstraint 
 	parent.version = DataTableVersion::ALTERED;
 }
 
+DataTable::DataTable(ClientContext &context, DataTable &parent)
+    : db(parent.db), info(parent.info), row_groups(parent.row_groups), version(DataTableVersion::MAIN_TABLE) {
+	info->BindIndexes(context);
+	auto &local_storage = LocalStorage::Get(context, db);
+	lock_guard<mutex> parent_lock(parent.append_lock);
+	for (auto &column_def : parent.column_definitions) {
+		column_definitions.emplace_back(column_def.Copy());
+	}
+	local_storage.MoveStorage(parent, *this);
+	parent.version = DataTableVersion::ALTERED;
+}
+
 DataTable::DataTable(ClientContext &context, DataTable &parent, idx_t changed_idx, const LogicalType &target_type,
                      const vector<StorageIndex> &bound_columns, Expression &cast_expr,
                      optional_ptr<BoundConstraint> constraint_to_verify)
@@ -803,7 +815,7 @@ void DataTable::VerifyDeleteForeignKeyConstraint(optional_ptr<LocalTableStorage>
 }
 
 void DataTable::VerifyNewConstraint(LocalStorage &local_storage, DataTable &parent, const BoundConstraint &constraint) {
-	if (constraint.type != ConstraintType::NOT_NULL) {
+	if (constraint.type != ConstraintType::NOT_NULL && constraint.type != ConstraintType::FOREIGN_KEY) {
 		throw NotImplementedException("FIXME: ALTER COLUMN with such constraint is not supported yet");
 	}
 
@@ -1658,7 +1670,7 @@ void DataTable::Checkpoint(TableDataWriter &writer, Serializer &serializer) {
 	vector<shared_ptr<const IndexStorageInfo>> index_infos;
 	if (index_writer) {
 		// Only checkpoint indexes when we write to disk
-		index_infos = info->GetIndexes().Checkpoint(*index_writer);
+		index_infos = info->GetIndexes().Checkpoint(*index_writer, writer.GetConstraintIndexOids());
 	}
 
 	writer.FinalizeTable(checkpoint_stats, *info, *row_groups, index_infos, serializer);

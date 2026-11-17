@@ -761,8 +761,13 @@ void DependencyManager::AlterObject(CatalogTransaction transaction, CatalogEntry
 				break;
 			}
 			case AlterTableType::ADD_COLUMN:
+			case AlterTableType::DROP_CONSTRAINT:
 			case AlterTableType::SET_DEFAULT: {
 				disallow_alter = false;
+				break;
+			}
+			case AlterTableType::ADD_CONSTRAINT: {
+				disallow_alter = !alter_info.IsAddIndexConstraint() || alter_info.IsAddUniqueConstraint();
 				break;
 			}
 			default:

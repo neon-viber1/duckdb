@@ -125,7 +125,8 @@ public:
 	void VerifyForeignKey(optional_ptr<const TableIndexList> delete_indexes, const vector<PhysicalIndex> &fk_keys,
 	                      DataChunk &chunk, ConflictManager &conflict_manager);
 	//! Persist index buffers and install replacements before returning their metadata.
-	vector<shared_ptr<const IndexStorageInfo>> Checkpoint(TableIndexWriter &writer);
+	vector<shared_ptr<const IndexStorageInfo>> Checkpoint(TableIndexWriter &writer,
+	                                                      const vector<idx_t> &constraint_oids);
 	//! Returns the physical table columns referenced by any index.
 	unordered_set<column_t> GetIndexedColumns() const;
 	//! Returns the column sets of unique indexes matching the conflict target.

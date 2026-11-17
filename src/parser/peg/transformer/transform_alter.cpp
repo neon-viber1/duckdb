@@ -368,7 +368,10 @@ unique_ptr<AlterTableInfo> PEGTransformerFactory::TransformDropConstraint(PEGTra
                                                                           const optional<bool> &if_exists,
                                                                           const Identifier &identifier,
                                                                           const optional<bool> &drop_behavior) {
-	throw NotImplementedException("No support for that ALTER TABLE option yet!");
+	if (drop_behavior && *drop_behavior) {
+		throw NotImplementedException("DROP CONSTRAINT CASCADE is not supported");
+	}
+	return make_uniq<DropConstraintInfo>(AlterEntryData(), identifier, if_exists.value_or(false));
 }
 
 unique_ptr<AlterTableInfo>

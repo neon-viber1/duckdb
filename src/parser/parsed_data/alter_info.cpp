@@ -64,6 +64,18 @@ bool AlterInfo::IsAddUniqueConstraint() const {
 	return constraint_info.constraint->type == ConstraintType::UNIQUE;
 }
 
+bool AlterInfo::IsAddIndexConstraint() const {
+	if (IsAddUniqueConstraint()) {
+		return true;
+	}
+	if (type != AlterType::ALTER_TABLE) {
+		return false;
+	}
+	auto &table_info = Cast<AlterTableInfo>();
+	return table_info.alter_table_type == AlterTableType::ADD_CONSTRAINT &&
+	       table_info.Cast<AddConstraintInfo>().constraint->type == ConstraintType::FOREIGN_KEY;
+}
+
 bool AlterInfo::IsAddPrimaryKey() const {
 	if (!IsAddUniqueConstraint()) {
 		return false;

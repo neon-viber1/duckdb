@@ -64,6 +64,7 @@ public:
 	DUCKDB_API virtual ~Constraint();
 
 	ConstraintType type;
+	Identifier name;
 
 public:
 	DUCKDB_API virtual string ToString() const = 0;

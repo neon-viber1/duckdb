@@ -1,0 +1,127 @@
+# name: test/sql/constraints/foreignkey/alter_foreign_key_transactions.test
+# description: Foreign key alterations conflict with concurrent writes and DDL
+# group: [foreignkey]
+
+statement ok
+CREATE TABLE parent(id INTEGER PRIMARY KEY);
+
+statement ok
+CREATE TABLE child(id INTEGER);
+
+statement ok
+INSERT INTO parent VALUES (1), (2);
+
+statement ok writer
+BEGIN;
+
+statement ok writer
+INSERT INTO child VALUES (99);
+
+statement ok
+ALTER TABLE child ADD CONSTRAINT link FOREIGN KEY(id) REFERENCES parent(id);
+
+statement error writer
+COMMIT;
+----
+Transaction
+
+query I
+SELECT count(*) FROM child;
+----
+0
+
+statement ok
+ALTER TABLE child DROP CONSTRAINT link;
+
+statement ok writer
+BEGIN;
+
+statement ok writer
+DELETE FROM parent WHERE id = 1;
+
+statement ok
+ALTER TABLE child ADD CONSTRAINT link FOREIGN KEY(id) REFERENCES parent(id);
+
+statement error writer
+COMMIT;
+----
+Transaction
+
+statement ok
+INSERT INTO child VALUES (1);
+
+statement ok ddl
+BEGIN;
+
+statement ok ddl
+ALTER TABLE child DROP CONSTRAINT link;
+
+statement error
+ALTER TABLE child ADD COLUMN extra INTEGER;
+----
+Transaction
+
+statement error
+DELETE FROM parent WHERE id = 1;
+----
+Transaction
+
+statement ok ddl
+ROLLBACK;
+
+statement error
+DELETE FROM parent WHERE id = 1;
+----
+Violates foreign key constraint
+
+statement ok ddl
+BEGIN;
+
+statement ok ddl
+ALTER TABLE child DROP CONSTRAINT link;
+
+statement error
+INSERT INTO child VALUES (99);
+----
+Violates foreign key constraint
+
+statement ok ddl
+COMMIT;
+
+statement ok
+INSERT INTO child VALUES (99);
+
+statement error
+ALTER TABLE child ADD CONSTRAINT link FOREIGN KEY(id) REFERENCES parent(id);
+----
+Violates foreign key constraint
+
+statement ok
+DELETE FROM child WHERE id = 99;
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE child ADD CONSTRAINT link FOREIGN KEY(id) REFERENCES parent(id);
+
+statement error writer
+INSERT INTO child VALUES (99);
+----
+Transaction
+
+statement error writer
+UPDATE parent SET id = 3 WHERE id = 1;
+----
+Transaction
+
+statement error writer
+ALTER TABLE parent ADD COLUMN extra INTEGER;
+----
+Transaction
+
+statement ok
+ROLLBACK;
+
+statement ok
+INSERT INTO child VALUES (99);

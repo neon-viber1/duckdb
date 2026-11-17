@@ -36,6 +36,7 @@ public:
 
 public:
 	void WriteTableData(Serializer &metadata_serializer);
+	vector<idx_t> GetConstraintIndexOids() const;
 
 	virtual void WriteUnchangedTable(MetaBlockPointer pointer, const vector<MetaBlockPointer> &metadata_pointers,
 	                                 idx_t total_rows, idx_t next_row_id) = 0;

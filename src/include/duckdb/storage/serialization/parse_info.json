@@ -345,6 +345,13 @@
         "name": "alter_fk_type",
         "property": "type",
         "type": "AlterForeignKeyType"
+      },
+      {
+        "id": 406,
+        "name": "constraint_name",
+        "type": "Identifier",
+        "default": "Identifier()",
+        "version": "v2.0.0"
       }
     ]
   },
@@ -1079,6 +1086,15 @@
         "name": "constraint",
         "type": "unique_ptr<Constraint>"
       }
+    ]
+  },
+  {
+    "class": "DropConstraintInfo",
+    "base": "AlterTableInfo",
+    "enum": "DROP_CONSTRAINT",
+    "members": [
+      {"id": 400, "name": "constraint_name", "type": "Identifier"},
+      {"id": 401, "name": "if_exists", "type": "bool"}
     ]
   },
   {

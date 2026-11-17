@@ -311,6 +311,9 @@ void DuckDBConstraintsFunction(ClientContext &context, TableFunctionInput &data_
 
 			auto info = GetExtraConstraintInfo(table, *constraint);
 			auto constraint_name = GetConstraintName(table, *constraint, info);
+			if (!constraint->name.empty()) {
+				constraint_name = constraint->name.GetIdentifierName();
+			}
 			if (data.constraint_names.find(Identifier(constraint_name)) != data.constraint_names.end()) {
 				// duplicate constraint name
 				idx_t index = 2;

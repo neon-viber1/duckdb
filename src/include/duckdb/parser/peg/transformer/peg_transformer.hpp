@@ -1379,6 +1379,8 @@ public:
 	                                                                             GeneratedTransformProcess &process);
 	static arena_ptr<TransformResultValue> FinalizeTopLevelConstraintTrampoline(PEGTransformer &transformer,
 	                                                                            GeneratedTransformProcess &process);
+	static arena_ptr<TransformResultValue> FinalizeConstraintNameClauseTrampoline(PEGTransformer &transformer,
+	                                                                              GeneratedTransformProcess &process);
 	static arena_ptr<TransformResultValue> FinalizeTopCheckConstraintTrampoline(PEGTransformer &transformer,
 	                                                                            GeneratedTransformProcess &process);
 	static arena_ptr<TransformResultValue>
@@ -3212,7 +3214,8 @@ public:
 	TransformColumnDefinition(PEGTransformer &transformer, const Identifier &identifier,
 	                          const optional<LogicalType> &type, optional<GeneratedColumnDefinition> generated_column,
 	                          optional<vector<ColumnConstraintEntry>> column_constraint);
-	static ColumnConstraintEntry TransformNameableColumnConstraint(PEGTransformer &transformer, const bool &has_result,
+	static ColumnConstraintEntry TransformNameableColumnConstraint(PEGTransformer &transformer,
+	                                                               const optional<Identifier> &constraint_name,
 	                                                               ColumnConstraintEntry child);
 	static ColumnConstraintEntry TransformNotNullConstraint(PEGTransformer &transformer, const bool &child);
 	static bool TransformNullConstraint(PEGTransformer &transformer);
@@ -3246,8 +3249,10 @@ public:
 	static string TransformCascadeKeyAction(PEGTransformer &transformer);
 	static string TransformSetNullKeyAction(PEGTransformer &transformer);
 	static string TransformSetDefaultKeyAction(PEGTransformer &transformer);
-	static unique_ptr<Constraint> TransformTopLevelConstraint(PEGTransformer &transformer, const bool &has_result,
+	static unique_ptr<Constraint> TransformTopLevelConstraint(PEGTransformer &transformer,
+	                                                          const optional<Identifier> &constraint_name,
 	                                                          unique_ptr<Constraint> top_level_constraint_list);
+	static Identifier TransformConstraintNameClause(PEGTransformer &transformer, const Identifier &constraint_name);
 	static unique_ptr<Constraint> TransformTopCheckConstraint(PEGTransformer &transformer,
 	                                                          ColumnConstraintEntry check_constraint);
 	static unique_ptr<Constraint>

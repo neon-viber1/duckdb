@@ -13,6 +13,7 @@
 #include "duckdb/main/settings.hpp"
 #include "duckdb/parallel/task_executor.hpp"
 #include "duckdb/planner/constraints/bound_not_null_constraint.hpp"
+#include "duckdb/planner/constraints/bound_foreign_key_constraint.hpp"
 #include "duckdb/storage/checkpoint/table_data_writer.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/storage/metadata/metadata_reader.hpp"
@@ -2433,17 +2434,22 @@ void RowGroupCollection::VerifyNewConstraint(const QueryContext &context, DuckTr
 	}
 
 	// Scan the original table for NULL values.
-	auto &not_null_constraint = constraint.Cast<BoundNotNullConstraint>();
 	vector<LogicalType> scan_types;
-	auto physical_index = not_null_constraint.index.index;
-	D_ASSERT(physical_index < types.size());
-
-	scan_types.push_back(types[physical_index]);
+	vector<StorageIndex> column_ids;
+	idx_t physical_index = 0;
+	if (constraint.type == ConstraintType::FOREIGN_KEY) {
+		scan_types = types;
+		for (idx_t column = 0; column < types.size(); column++) {
+			column_ids.emplace_back(column);
+		}
+	} else {
+		physical_index = constraint.Cast<BoundNotNullConstraint>().index.index;
+		D_ASSERT(physical_index < types.size());
+		scan_types.push_back(types[physical_index]);
+		column_ids.emplace_back(physical_index);
+	}
 	DataChunk scan_chunk;
 	scan_chunk.Initialize(GetAllocator(), scan_types);
-
-	vector<StorageIndex> column_ids;
-	column_ids.emplace_back(physical_index);
 
 	CreateIndexScanState state;
 	state.Initialize(column_ids, nullptr);
@@ -2465,7 +2471,10 @@ void RowGroupCollection::VerifyNewConstraint(const QueryContext &context, DuckTr
 		}
 
 		// Verify the NOT NULL constraint.
-		if (VectorOperations::HasNull(scan_chunk.data[0])) {
+		if (constraint.type == ConstraintType::FOREIGN_KEY) {
+			parent.VerifyAppendForeignKeyConstraint(nullptr, constraint.Cast<BoundForeignKeyConstraint>(),
+			                                        *context.GetContext()->TryGetClientContext(), scan_chunk);
+		} else if (VectorOperations::HasNull(scan_chunk.data[0])) {
 			auto name = parent.Columns()[physical_index].GetName();
 			throw ConstraintException("NOT NULL constraint failed: %s.%s", SQLIdentifier(info->GetTableName()),
 			                          SQLIdentifier(name));
